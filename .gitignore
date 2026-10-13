@@ -1,0 +1,7 @@
+# build output
+/hopssh
+
+# credentials: never commit
+git_username_token
+*token*
+.env

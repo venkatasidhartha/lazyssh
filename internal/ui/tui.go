@@ -3,6 +3,9 @@
 package ui
 
 import (
+	"sync/atomic"
+	"time"
+
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
@@ -27,6 +30,11 @@ type App struct {
 	root       *tview.Flex
 
 	sortMode SortMode
+
+	revealID  string // server whose password is shown in clear text
+	revealGen int    // invalidates older auto-hide timers
+
+	suspended atomic.Bool // an SSH session owns the terminal
 }
 
 func New(st *store.Store, conn *sshx.Connector, version string) *App {
@@ -49,6 +57,9 @@ func (t *App) Run() error {
 	t.root.SetInputCapture(t.handleGlobalKeys)
 	t.refreshServerList()
 	t.app.SetRoot(t.root, true).SetFocus(t.serverList)
+	stop := make(chan struct{})
+	defer close(stop)
+	go t.tick(stop)
 	return t.app.Run()
 }
 
@@ -74,7 +85,10 @@ func (t *App) buildComponents() {
 		OnSelectionChange(t.handleServerSelectionChange).
 		OnReturnToSearch(t.handleSearchFocus).
 		OnActivate(func(domain.Server) { t.handleServerConnect() })
-	t.details = NewServerDetails()
+	t.details = NewServerDetails().OnEye(func() {
+		t.handleTogglePassword()
+		t.app.SetFocus(t.serverList)
+	})
 	t.statusBar = NewStatusBar()
 }
 
@@ -82,13 +96,46 @@ func (t *App) buildLayout() {
 	left := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(t.searchBar, 3, 0, false).
 		AddItem(t.serverList, 0, 1, true)
-	content := tview.NewFlex().SetDirection(tview.FlexColumn).
-		AddItem(left, 0, 3, true).
-		AddItem(t.details, 0, 2, false)
+	// The server table gets all remaining width; the details panel has a
+	// fixed width and is hidden on narrow terminals.
+	content := tview.NewFlex().SetDirection(tview.FlexColumn)
+	content.SetDrawFunc(func(_ tcell.Screen, x, y, w, h int) (int, int, int, int) {
+		content.Clear()
+		content.AddItem(left, 0, 1, true)
+		if w >= 100 {
+			content.AddItem(t.details, 44, 0, false)
+		}
+		return x, y, w, h
+	})
+	content.AddItem(left, 0, 1, true).AddItem(t.details, 44, 0, false)
 	t.root = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(t.header, 2, 0, false).
 		AddItem(content, 0, 1, true).
 		AddItem(t.statusBar, 1, 0, false)
+}
+
+// tick redraws every second for the header clock and refreshes the list
+// every 30 seconds so "Last SSH" stays current. It pauses while an SSH
+// session has the terminal.
+func (t *App) tick(stop <-chan struct{}) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for n := 1; ; n++ {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+		}
+		if t.suspended.Load() {
+			continue
+		}
+		refresh := n%30 == 0
+		t.app.QueueUpdateDraw(func() {
+			if refresh {
+				t.refreshServerList()
+			}
+		})
+	}
 }
 
 func (t *App) serverCount() int { return len(t.store.List()) }

@@ -232,11 +232,31 @@ sudo_usable() {
 	return 1
 }
 
-# pick_bin_dir sets BIN_DIR and NEED_ROOT.
+# is_ours reports whether FILE is this project's lazyssh (and not, for
+# example, the upstream Adembc/lazyssh which uses the same name).
+is_ours() {
+	[ -x "$1" ] && "$1" --help 2>/dev/null | grep -q "LAZYSSH_HOME"
+}
+
+# find_existing prints the path of an installed copy of our lazyssh.
+find_existing() {
+	for _f in "$(command -v "$BIN_NAME" 2>/dev/null || true)" "/usr/local/bin/$BIN_NAME" "$HOME/.local/bin/$BIN_NAME"; do
+		if [ -n "$_f" ] && is_ours "$_f"; then
+			echo "$_f"
+			return 0
+		fi
+	done
+	return 1
+}
+
+# pick_bin_dir sets BIN_DIR and NEED_ROOT. An existing installation is
+# updated where it is, so there is never a second, stale copy.
 pick_bin_dir() {
 	NEED_ROOT=0
 	if [ -n "$BIN_DIR" ]; then
 		:
+	elif [ "$USER_INSTALL" -eq 0 ] && EXISTING="$(find_existing)"; then
+		BIN_DIR="$(dirname "$EXISTING")"
 	elif [ "$USER_INSTALL" -eq 1 ]; then
 		BIN_DIR="$HOME/.local/bin"
 	elif sudo_usable; then
@@ -251,8 +271,45 @@ pick_bin_dir() {
 	if [ ! -d "$BIN_DIR" ] && mkdir -p "$BIN_DIR" 2>/dev/null; then
 		return
 	fi
-	sudo_usable || die "cannot write to $BIN_DIR (try --user)"
+	sudo_usable || die "cannot write to $BIN_DIR: run as root or with sudo rights (or use --user)"
 	NEED_ROOT=1
+}
+
+# backup_data copies the saved servers before an update. The installer
+# never modifies or deletes them.
+backup_data() {
+	_d="$(config_dir)"
+	[ -f "$_d/servers.json" ] || return 0
+	_n="$(grep -o '"alias"' "$_d/servers.json" 2>/dev/null | wc -l | tr -d ' ')"
+	if cp -p "$_d/servers.json" "$_d/servers.json.before-$LATEST" 2>/dev/null; then
+		ok "your ${_n:-0} saved server(s) are kept ($_d, backup: servers.json.before-$LATEST)"
+	else
+		ok "your ${_n:-0} saved server(s) are kept ($_d)"
+	fi
+}
+
+# replace_binary swaps in the new binary in one step (safe even while
+# lazyssh is running) and restores the previous one if the new one fails.
+replace_binary() {
+	_run=""
+	[ "$NEED_ROOT" -eq 1 ] && _run="as_root"
+	$_run mkdir -p "$BIN_DIR"
+	{ $_run cp "$TMP/$BIN_NAME" "$TARGET.new" && $_run chmod 0755 "$TARGET.new"; } ||
+		die "cannot write to $BIN_DIR"
+	if [ -e "$TARGET" ]; then
+		if is_ours "$TARGET"; then
+			$_run cp -p "$TARGET" "$TARGET.old"
+		else
+			$_run mv -f "$TARGET" "$TARGET.other-backup"
+			warn "a different program named lazyssh was at $TARGET — moved to $TARGET.other-backup"
+		fi
+	fi
+	$_run mv -f "$TARGET.new" "$TARGET" || die "cannot replace $TARGET"
+	if ! "$TARGET" --version >/dev/null 2>&1; then
+		[ -e "$TARGET.old" ] && $_run mv -f "$TARGET.old" "$TARGET"
+		die "the new version failed to start; the previous version was restored"
+	fi
+	$_run rm -f "$TARGET.old"
 }
 
 install_ssh_client() {
@@ -327,7 +384,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
 	for f in ${BIN_DIR:+"$BIN_DIR/$BIN_NAME"} "/usr/local/bin/$BIN_NAME" "$HOME/.local/bin/$BIN_NAME"; do
 		[ -e "$f" ] || continue
 		# Only remove our build, not the upstream lazyssh.
-		"$f" --help 2>/dev/null | grep -q "LAZYSSH_HOME" || {
+		is_ours "$f" || {
 			warn "skipping $f (not this lazyssh build)"
 			continue
 		}
@@ -368,7 +425,8 @@ if [ "$INSECURE" = "1" ]; then
 fi
 download "$BASE_URL/VERSION" "$TMP/VERSION"
 LATEST="$(tr -d ' \r\n' <"$TMP/VERSION")"
-CURRENT="$(installed_version "$TARGET")"
+CURRENT=""
+is_ours "$TARGET" && CURRENT="$(installed_version "$TARGET")"
 
 if [ "$FORCE" -eq 0 ] && [ -n "$CURRENT" ] && [ "$CURRENT" = "$LATEST" ]; then
 	ok "lazyssh $CURRENT is already up to date ($TARGET)"
@@ -376,6 +434,9 @@ if [ "$FORCE" -eq 0 ] && [ -n "$CURRENT" ] && [ "$CURRENT" = "$LATEST" ]; then
 	exit 0
 fi
 
+if [ -n "$CURRENT" ]; then
+	info "found lazyssh $CURRENT at $TARGET — updating it in place"
+fi
 info "downloading $ASSET $LATEST"
 download "$BASE_URL/$ASSET" "$TMP/$BIN_NAME"
 download "$BASE_URL/SHA256SUMS" "$TMP/SHA256SUMS"
@@ -395,14 +456,9 @@ chmod 0755 "$TMP/$BIN_NAME"
 
 if [ "$NEED_ROOT" -eq 1 ]; then
 	info "installing to $TARGET (needs sudo)"
-	as_root mkdir -p "$BIN_DIR"
-	as_root install -m 0755 "$TMP/$BIN_NAME" "$TARGET" 2>/dev/null ||
-		{ as_root cp "$TMP/$BIN_NAME" "$TARGET" && as_root chmod 0755 "$TARGET"; }
-else
-	mkdir -p "$BIN_DIR"
-	install -m 0755 "$TMP/$BIN_NAME" "$TARGET" 2>/dev/null ||
-		{ cp "$TMP/$BIN_NAME" "$TARGET" && chmod 0755 "$TARGET"; }
 fi
+backup_data
+replace_binary
 
 if [ -n "$CURRENT" ]; then
 	ok "updated lazyssh $CURRENT → $LATEST ($TARGET)"

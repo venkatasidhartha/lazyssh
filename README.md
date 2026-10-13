@@ -1,5 +1,7 @@
 # 🚀 lazyssh
 
+By **Venkata Sidhartha K**
+
 A simple terminal SSH manager written in Go. Its look and key bindings follow
 the original [lazyssh by Adembc](https://github.com/adembc/lazyssh). It adds automatic password-to-key
 login, which is useful when you manage many on-prem servers.
@@ -16,8 +18,20 @@ If the system has no `curl`, use `wget` instead:
 wget -qO- https://raw.githubusercontent.com/venkatasidhartha/lazyssh/develop/install.sh | sh
 ```
 
-Then run `lazyssh`. To update, run the same command again. If you already
-have the latest version, the installer says so and exits.
+Then run `lazyssh`.
+
+### Updating
+
+Run the **same command** again. The installer finds your existing lazyssh
+and replaces only the program file, in the same place it was installed.
+
+- **Your saved servers, passwords and keys are never touched.** They live
+  in `~/.config/lazyssh`. The installer also copies `servers.json` to
+  `servers.json.before-<version>` before it updates.
+- The new binary is swapped in with one atomic move, so updating works
+  even while lazyssh is open in another terminal.
+- If the new version does not start, the previous one is put back.
+- If you already have the latest version, the installer says so and exits.
 
 The installer:
 
@@ -66,8 +80,19 @@ instead of the Debian/Ubuntu paths.
 
 - **Fuzzy search** by name, IP address, user or tag (`/`). Type several words
   to narrow the list, e.g. `prod db`. Use `#tag` to match a tag exactly.
+- **Table view** with NAME, HOST / IP, USER, AUTH, LAST SSH and TAGS
+  columns. Pinned servers are marked ★, and servers with active port
+  forwards are marked F.
 - **Add or edit servers** (`a` / `e`) with alias, IP, user, port, password,
-  optional key file and tags.
+  optional key file and tags. Press Ctrl+R in the form to show the
+  password.
+- **Tag picker**: type in the Tags field to search existing tags, or press
+  ↓ to list them all. Enter picks the highlighted tag. To add a new tag,
+  type it and press `,`. Separate several tags with commas.
+- **Show and copy passwords**: press `v` (or click **show** in Details) to
+  show the selected server's password. It hides again after 30 seconds.
+  Press `y` to copy it to the clipboard so you can share it with your team.
+- **Live clock** in the header, with seconds and time zone.
 - **One-key connect**: press `Enter`, or click a server that is already
   selected.
   - **First login** uses the password. lazyssh then installs its own ed25519
@@ -98,6 +123,7 @@ instead of the Debian/Ubuntu paths.
 | `g` | Ping (TCP) | `r` | Refresh |
 | `f` | Port forward | `x` | Stop forwards |
 | `K` | Redo key setup | `q` | Quit |
+| `v` | Show / hide password | `y` | Copy password |
 
 In the form: `Tab`/`↑↓` move between fields, `Ctrl+S` saves, `Esc` cancels.
 

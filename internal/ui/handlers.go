@@ -66,6 +66,10 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		t.handleStopForwarding()
 	case 'K':
 		t.handleRedoKeySetup()
+	case 'v':
+		t.handleTogglePassword()
+	case 'y':
+		t.handleCopyPassword()
 	case 'j':
 		t.moveSelection(1)
 	case 'k':
@@ -102,7 +106,10 @@ func (t *App) handleServerSelectionChange(s domain.Server) {
 	for _, f := range t.forwarder.Active(s.ID) {
 		fwds = append(fwds, f.String())
 	}
-	t.details.UpdateServer(s, fwds)
+	if s.ID != t.revealID {
+		t.revealID = "" // never carry a revealed password to another server
+	}
+	t.details.UpdateServer(s, fwds, t.revealID == s.ID)
 }
 
 // refreshServerList reloads from the store, applying the search query
@@ -136,6 +143,8 @@ func (t *App) handleServerConnect() {
 	if !ok {
 		return
 	}
+	t.suspended.Store(true)
+	defer t.suspended.Store(false)
 	t.app.Suspend(func() {
 		fmt.Print("\x1b[2J\x1b[H")
 		fmt.Printf("🚀 \x1b[1mlazy\x1b[38;5;81mssh\x1b[0m → \x1b[1m%s\x1b[0m (%s)\n", s.Alias, s.Target())
@@ -178,14 +187,69 @@ func (t *App) handleCopyCommand() {
 		return
 	}
 	cmd := sshx.CommandLine(s, t.connector.Key.Path)
-	if err := clipboard.WriteAll(cmd); err != nil {
+	copyToClipboard(cmd)
+	t.showStatusTemp("Copied: " + cmd)
+}
+
+func copyToClipboard(text string) {
+	if err := clipboard.WriteAll(text); err != nil {
 		// No xclip/xsel/wl-copy: ask the terminal to copy via OSC 52.
 		if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
-			fmt.Fprintf(tty, "\x1b]52;c;%s\x07", base64.StdEncoding.EncodeToString([]byte(cmd)))
+			fmt.Fprintf(tty, "\x1b]52;c;%s\x07", base64.StdEncoding.EncodeToString([]byte(text)))
 			tty.Close()
 		}
 	}
-	t.showStatusTemp("Copied: " + cmd)
+}
+
+const revealFor = 30 * time.Second
+
+// handleTogglePassword shows or hides the selected server's password in
+// the details panel. A shown password hides itself after revealFor.
+func (t *App) handleTogglePassword() {
+	s, ok := t.serverList.GetSelectedServer()
+	if !ok {
+		return
+	}
+	if s.Password == "" {
+		t.showStatusError("No password saved for " + s.Alias)
+		return
+	}
+	t.revealGen++
+	if t.revealID == s.ID {
+		t.revealID = ""
+	} else {
+		t.revealID = s.ID
+		gen := t.revealGen
+		time.AfterFunc(revealFor, func() {
+			t.app.QueueUpdateDraw(func() {
+				if t.revealGen == gen && t.revealID != "" {
+					t.revealID = ""
+					t.refreshDetails()
+				}
+			})
+		})
+		t.showStatusTemp(fmt.Sprintf("Password shown for %s — hides in %ds", s.Alias, int(revealFor.Seconds())))
+	}
+	t.refreshDetails()
+}
+
+func (t *App) handleCopyPassword() {
+	s, ok := t.serverList.GetSelectedServer()
+	if !ok {
+		return
+	}
+	if s.Password == "" {
+		t.showStatusError("No password saved for " + s.Alias)
+		return
+	}
+	copyToClipboard(s.Password)
+	t.showStatusTemp("Password for " + s.Alias + " copied to clipboard")
+}
+
+func (t *App) refreshDetails() {
+	if s, ok := t.serverList.GetSelectedServer(); ok {
+		t.handleServerSelectionChange(s)
+	}
 }
 
 func (t *App) handlePingSelected() {
@@ -281,9 +345,12 @@ func (t *App) showDeleteConfirmModal(s domain.Server) {
 func (t *App) showEditTagsForm(s domain.Server) {
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(fmt.Sprintf(" Edit Tags: %s ", s.Alias)).SetTitleAlign(tview.AlignCenter)
-	form.AddInputField("Tags (comma):", strings.Join(s.Tags, ", "), 40, nil, nil)
+	form.AddInputField("Tags:", joinTags(s.Tags), 50, nil, nil)
+	field := form.GetFormItem(0).(*tview.InputField)
+	field.SetPlaceholder("type to search, ↓ for all tags, commas for several").SetPlaceholderTextColor(tcell.Color242)
+	attachTagPicker(field, tagUsage(t.store.List()))
 	form.AddButton("Save", func() {
-		tags := parseTags(form.GetFormItem(0).(*tview.InputField).GetText())
+		tags := parseTags(field.GetText())
 		if _, err := t.store.Mutate(s.ID, func(x *domain.Server) { x.Tags = tags }); err != nil {
 			t.showStatusError(err.Error())
 		}

@@ -3,10 +3,11 @@ package ui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/mattn/go-runewidth"
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
 	"lazyssh/internal/domain"
@@ -15,50 +16,60 @@ import (
 // isForwarding reports whether a server has active port forwards.
 var isForwarding func(id string) bool
 
-func renderTagBadgesForList(tags []string) string {
-	if len(tags) == 0 {
-		return ""
+// serverRowCells renders one server as table cells, matching serverColumns.
+func serverRowCells(s domain.Server) []*tview.TableCell {
+	cell := func(text string, color tcell.Color) *tview.TableCell {
+		return tview.NewTableCell(tview.Escape(text)).SetTextColor(color).SetMaxWidth(32)
 	}
-	const maxTags = 2
-	shown := tags
-	if len(tags) > maxTags {
-		shown = tags[:maxTags]
+	mark := " "
+	markColor := tcell.Color252
+	switch {
+	case isForwarding != nil && isForwarding(s.ID):
+		mark, markColor = "F", tcell.NewHexColor(0xA0FFA0)
+	case !s.PinnedAt.IsZero():
+		mark, markColor = "★", tcell.NewHexColor(0xFFD75F)
 	}
-	parts := make([]string, 0, len(shown)+1)
-	for _, t := range shown {
-		parts = append(parts, fmt.Sprintf("[black:#5FAFFF] %s [-:-:-]", tview.Escape(t)))
+	authText, authColor := authShort(s)
+	user := s.User
+	if user == "" {
+		user = "-"
 	}
-	if extra := len(tags) - len(shown); extra > 0 {
-		parts = append(parts, fmt.Sprintf("[#8A8A8A]+%d[-]", extra))
+	host := s.Host
+	if p := portOf(s); p != 22 {
+		host += ":" + strconv.Itoa(p)
 	}
-	return strings.Join(parts, " ")
+	lastColor := tcell.Color250
+	if s.LastSeen.IsZero() {
+		lastColor = tcell.Color242
+	}
+	return []*tview.TableCell{
+		cell(mark, markColor),
+		cell(s.Alias, tcell.ColorWhite).SetAttributes(tcell.AttrBold).SetMaxWidth(20),
+		cell(host, tcell.Color252).SetMaxWidth(26),
+		cell(user, tcell.Color250).SetMaxWidth(12),
+		cell(authText, authColor),
+		cell(humanizeDuration(s.LastSeen), lastColor),
+		cell(strings.Join(s.Tags, ", "), tcell.NewHexColor(0x5FAFFF)).SetMaxWidth(0),
+	}
 }
 
-// cellPad pads s to width display cells so emoji icons keep alignment.
-func cellPad(s string, width int) string {
-	w := runewidth.StringWidth(s)
-	if w >= width {
-		return s
+// authShort is the AUTH column: how the next login will happen.
+func authShort(s domain.Server) (string, tcell.Color) {
+	green, yellow, blue := tcell.NewHexColor(0xA0FFA0), tcell.NewHexColor(0xFFD75F), tcell.NewHexColor(0x87D7FF)
+	switch {
+	case s.Auth == domain.AuthPassword:
+		return "password", yellow
+	case s.Auth == domain.AuthKey, s.KeyPath != "":
+		return "key", green
+	case s.KeyState == domain.KeyInstalled:
+		return "key (auto)", green
+	case s.KeyState == domain.KeyUnsupported:
+		return "password", yellow
+	case s.Password != "":
+		return "pending", blue
+	default:
+		return "agent", blue
 	}
-	return s + strings.Repeat(" ", width-w)
-}
-
-func pinnedIcon(pinnedAt time.Time) string {
-	if pinnedAt.IsZero() {
-		return "📡"
-	}
-	return "📌"
-}
-
-func formatServerLine(s domain.Server) string {
-	icon := cellPad(pinnedIcon(s.PinnedAt), 2)
-	fwd := isForwarding != nil && isForwarding(s.ID)
-	fCol := cellPad("", 2)
-	if fwd {
-		fCol = "[#A0FFA0]" + cellPad("Ⓕ", 2) + "[-]"
-	}
-	return fmt.Sprintf("%s [white::b]%-12s[-] [#AAAAAA]%-18s[-] %s [#888888]Last SSH: %s[-]  %s",
-		icon, tview.Escape(s.Alias), tview.Escape(s.Host), fCol, humanizeDuration(s.LastSeen), renderTagBadgesForList(s.Tags))
 }
 
 func humanizeDuration(t time.Time) string {

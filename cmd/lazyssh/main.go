@@ -24,7 +24,7 @@ func main() {
 			fmt.Println("lazyssh", version)
 			return
 		case "-h", "--help", "help":
-			fmt.Println("lazyssh — simple terminal SSH manager\n\nUsage: lazyssh\n\nData directory: ~/.config/lazyssh (override with $LAZYSSH_HOME)")
+			fmt.Println("lazyssh " + version + " — simple terminal SSH manager by " + ui.Author + "\n\nUsage: lazyssh\n\nData directory: ~/.config/lazyssh (override with $LAZYSSH_HOME)")
 			return
 		}
 	}

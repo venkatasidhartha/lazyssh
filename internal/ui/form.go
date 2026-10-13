@@ -28,10 +28,10 @@ var fieldHelp = map[string]string{
 	"Host":     "[::b]Host/IP[-]\n\nIP address or DNS name of the server. [#FF6B6B](required)[-]\n\n[#888888]Examples:[-]\n  10.0.0.10\n  build.example.com",
 	"User":     "[::b]User[-]\n\nRemote login user. Defaults to your local user name when empty.",
 	"Port":     "[::b]Port[-]\n\nSSH port of the server. Default: 22",
-	"Password": "[::b]Password[-]\n\nUsed for the first login. With Auth = Auto, lazyssh then installs its own SSH key on the server and uses the key from then on.\n\nIf the server does not allow keys (common on locked-down on-prem hosts), lazyssh keeps logging in with this password automatically.\n\nStored encrypted (AES-256-GCM) in ~/.config/lazyssh.",
+	"Password": "[::b]Password[-]\n\nUsed for the first login. With Auth = Auto, lazyssh then installs its own SSH key on the server and uses the key from then on.\n\nIf the server does not allow keys (common on locked-down on-prem hosts), lazyssh keeps logging in with this password automatically.\n\nStored encrypted (AES-256-GCM) in ~/.config/lazyssh.\n\n[#55D7FF]Ctrl+R[-] shows/hides the password.",
 	"Key":      "[::b]SSH Key[-]\n\nOptional path to an existing private key, e.g. ~/.ssh/id_ed25519. Press Tab for suggestions.\n\nLeave empty to let lazyssh manage a key for you.",
 	"Auth":     "[::b]Authentication[-]\n\n[#55D7FF]Auto[-]: password on first login → key installed and verified → key used afterwards. Falls back to password if the server refuses keys.\n\n[#55D7FF]Password only[-]: always log in with the saved password.\n\n[#55D7FF]Key only[-]: use the key file, ssh-agent or your default ~/.ssh keys.",
-	"Tags":     "[::b]Tags[-]\n\nComma separated labels used for grouping and search.\n\n[#888888]Example:[-]\n  prod, db, onprem",
+	"Tags":     "[::b]Tags[-]\n\nLabels used for grouping and search. Separate several tags with commas.\n\n[#55D7FF]Type[-] to search existing tags\n[#55D7FF]↓[-] to list all existing tags\n[#55D7FF]Enter[-] to pick the highlighted tag\n[#55D7FF]New tag:[-] type it and press [#55D7FF],[-] (or pick [#55D7FF]+ new tag[-])\n[#55D7FF]Esc[-] closes the list\n\n[#888888]Example:[-]\n  prod, db, onprem",
 }
 
 type serverForm struct {
@@ -41,6 +41,7 @@ type serverForm struct {
 	form     *tview.Form
 	help     *tview.TextView
 	authIdx  int
+	masked   bool
 
 	alias, host, user, port, password, key, tags *tview.InputField
 }
@@ -76,6 +77,7 @@ func (sf *serverForm) build() {
 	sf.port = sf.input("Port:", "Port", port, 8, "22")
 	sf.password = sf.input("Password:", "Password", s.Password, 30, "used for first login")
 	sf.password.SetMaskCharacter('•')
+	sf.masked = true
 	sf.key = sf.input("SSH Key:", "Key", s.KeyPath, 40, "optional, e.g. ~/.ssh/id_ed25519")
 	sf.key.SetAutocompleteFunc(keyAutocomplete)
 
@@ -93,7 +95,8 @@ func (sf *serverForm) build() {
 		tcell.StyleDefault.Background(tcell.Color24).Foreground(tcell.Color255))
 	sf.form.AddFormItem(auth)
 
-	sf.tags = sf.input("Tags (comma):", "Tags", strings.Join(s.Tags, ", "), 30, "e.g. prod, db")
+	sf.tags = sf.input("Tags:", "Tags", joinTags(s.Tags), 40, "type to search, ↓ for all tags")
+	attachTagPicker(sf.tags, tagUsage(sf.t.store.List()))
 
 	sf.form.AddButton("Save", sf.save)
 	sf.form.AddButton("Cancel", sf.t.returnToMain)
@@ -130,19 +133,33 @@ func (sf *serverForm) build() {
 
 	hint := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter)
 	hint.SetBackgroundColor(tcell.Color235)
-	hint.SetText("[white]Tab/↑↓[-] Navigate  • [white]^S[-] Save  • [white]Esc[-] Cancel")
+	hint.SetText("[white]Tab/↑↓[-] Navigate  • [white]^R[-] Show/hide password  • [white]^S[-] Save  • [white]Esc[-] Cancel")
 
 	sf.Flex.AddItem(NewAppHeader(sf.t.version, sf.t.serverCount), 2, 0, false).
 		AddItem(main, 0, 1, true).
 		AddItem(hint, 1, 0, false)
 
 	sf.Flex.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		if ev.Key() == tcell.KeyCtrlS {
+		switch ev.Key() {
+		case tcell.KeyCtrlS:
 			sf.save()
+			return nil
+		case tcell.KeyCtrlR:
+			sf.togglePasswordMask()
 			return nil
 		}
 		return ev
 	})
+}
+
+func (sf *serverForm) togglePasswordMask() {
+	sf.masked = !sf.masked
+	if sf.masked {
+		sf.password.SetMaskCharacter('•')
+		sf.masked = true
+	} else {
+		sf.password.SetMaskCharacter(0)
+	}
 }
 
 func (sf *serverForm) input(label, helpKey, value string, width int, placeholder string) *tview.InputField {

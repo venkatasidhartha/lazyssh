@@ -29,9 +29,9 @@ var fieldHelp = map[string]string{
 	"User":     "[::b]User[-]\n\nRemote login user. Defaults to your local user name when empty.",
 	"Port":     "[::b]Port[-]\n\nSSH port of the server. Default: 22",
 	"Password": "[::b]Password[-]\n\nUsed for the first login. With Auth = Auto, lazyssh then installs its own SSH key on the server and uses the key from then on.\n\nIf the server does not allow keys (common on locked-down on-prem hosts), lazyssh keeps logging in with this password automatically.\n\nStored encrypted (AES-256-GCM) in ~/.config/lazyssh.\n\n[#55D7FF]Ctrl+R[-] shows/hides the password.",
-	"Key":      "[::b]SSH Key[-]\n\nOptional path to an existing private key, e.g. ~/.ssh/id_ed25519. Press Tab for suggestions.\n\nLeave empty to let lazyssh manage a key for you.",
+	"Key":      "[::b]SSH Key[-]\n\nOptional path to an existing private key, e.g. ~/.ssh/id_ed25519.\n\nType to see matching keys from ~/.ssh, or press [#55D7FF]↓[-] to list them all. [#55D7FF]Enter[-] picks one; [#55D7FF]Tab[-] just moves on.\n\nLeave empty to let lazyssh manage a key for you.",
 	"Auth":     "[::b]Authentication[-]\n\n[#55D7FF]Auto[-]: password on first login → key installed and verified → key used afterwards. Falls back to password if the server refuses keys.\n\n[#55D7FF]Password only[-]: always log in with the saved password.\n\n[#55D7FF]Key only[-]: use the key file, ssh-agent or your default ~/.ssh keys.",
-	"Tags":     "[::b]Tags[-]\n\nLabels used for grouping and search. Separate several tags with commas.\n\n[#55D7FF]Type[-] to search existing tags\n[#55D7FF]↓[-] to list all existing tags\n[#55D7FF]Enter[-] to pick the highlighted tag\n[#55D7FF]New tag:[-] type it and press [#55D7FF],[-] (or pick [#55D7FF]+ new tag[-])\n[#55D7FF]Esc[-] closes the list\n\n[#888888]Example:[-]\n  prod, db, onprem",
+	"Tags":     "[::b]Tags[-]\n\nLabels used for grouping and search. Separate several tags with commas.\n\n[#55D7FF]Type[-] to search existing tags\n[#55D7FF]↓[-] to list all existing tags\n[#55D7FF]Enter[-] to pick the highlighted tag ([#55D7FF]Tab[-] just moves on)\n[#55D7FF]New tag:[-] type it and press [#55D7FF],[-] (or pick [#55D7FF]+ new tag[-])\n[#55D7FF]Esc[-] closes the list\n\n[#888888]Example:[-]\n  prod, db, onprem",
 }
 
 type serverForm struct {
@@ -79,7 +79,7 @@ func (sf *serverForm) build() {
 	sf.password.SetMaskCharacter('•')
 	sf.masked = true
 	sf.key = sf.input("SSH Key:", "Key", s.KeyPath, 40, "optional, e.g. ~/.ssh/id_ed25519")
-	sf.key.SetAutocompleteFunc(keyAutocomplete)
+	attachSuggestions(sf.key, keySuggestions, func(path string) { sf.key.SetText(path) })
 
 	labels := make([]string, len(authOptions))
 	for i, o := range authOptions {
@@ -253,8 +253,12 @@ func (sf *serverForm) showError(msg string) {
 	sf.t.app.SetRoot(modal, true)
 }
 
-// keyAutocomplete suggests private keys from ~/.ssh.
-func keyAutocomplete(text string) []string {
+// keySuggestions lists private keys in ~/.ssh matching text (all of them
+// when ↓ was pressed on an empty field).
+func keySuggestions(text string, showAll bool) []string {
+	if text == "" && !showAll {
+		return nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
@@ -271,7 +275,7 @@ func keyAutocomplete(text string) []string {
 			continue
 		}
 		p := "~/.ssh/" + n
-		if text == "" || strings.Contains(strings.ToLower(p), strings.ToLower(text)) {
+		if strings.Contains(strings.ToLower(p), strings.ToLower(text)) {
 			out = append(out, p)
 		}
 	}

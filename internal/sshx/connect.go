@@ -218,7 +218,10 @@ func SSHArgs(s domain.Server, keyPath string) []string {
 	if keyPath != "" {
 		args = append(args, "-i", ExpandHome(keyPath), "-o", "IdentitiesOnly=yes")
 	}
-	args = append(args, "-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30", s.Target())
+	// Use the same known_hosts file as the built-in client, so a host key
+	// accepted there is the one ssh checks (OpenSSH ignores $HOME).
+	args = append(args, "-o", "UserKnownHostsFile="+knownHostsPath(),
+		"-o", "StrictHostKeyChecking=accept-new", "-o", "ServerAliveInterval=30", s.Target())
 	return args
 }
 

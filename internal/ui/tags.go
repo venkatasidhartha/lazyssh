@@ -52,28 +52,58 @@ func splitTagInput(text string) (done []string, current string) {
 	return done, strings.TrimSpace(parts[len(parts)-1])
 }
 
-// attachTagPicker turns a comma-separated input field into a tag picker:
-// typing shows matching existing tags (fuzzy), ↓ lists all of them, Enter
-// or Tab picks one. A tag that does not exist yet is created by picking
-// "+ new tag" or by typing it followed by a comma.
-func attachTagPicker(field *tview.InputField, usage map[string]int) {
-	showAll := false
-	labels := map[string]string{} // dropdown label -> tag
+// attachSuggestions adds a suggestion list to field. The list opens only
+// while typing or when ↓ is pressed — never just because the field got
+// focus. Enter or a click picks the highlighted entry; Tab and Shift+Tab
+// always move to the next/previous field without picking anything.
+func attachSuggestions(field *tview.InputField, suggest func(text string, showAll bool) []string, pick func(label string)) {
+	showAll, suppress := false, true // suppress: no list when the form opens
 
 	field.SetAutocompleteStyles(tcell.Color235,
 		tcell.StyleDefault.Background(tcell.Color235).Foreground(tcell.Color252),
 		tcell.StyleDefault.Background(tcell.Color24).Foreground(tcell.Color255))
 
 	field.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		if ev.Key() == tcell.KeyDown {
+		switch ev.Key() {
+		case tcell.KeyDown:
 			showAll = true
+		case tcell.KeyTab, tcell.KeyBacktab:
+			// Close the list first so Tab moves on instead of picking.
+			suppress = true
+			field.Autocomplete()
+			suppress = false
 		}
 		return ev
 	})
-
 	field.SetAutocompleteFunc(func(text string) []string {
 		all := showAll
 		showAll = false
+		if suppress {
+			return nil
+		}
+		return suggest(text, all)
+	})
+	suppress = false
+	field.SetAutocompletedFunc(func(label string, _ int, source int) bool {
+		switch source {
+		case tview.AutocompletedNavigate:
+			return false
+		case tview.AutocompletedTab:
+			return true // never pick on Tab
+		}
+		pick(label)
+		return true
+	})
+}
+
+// attachTagPicker turns a comma-separated input field into a tag picker:
+// typing shows matching existing tags (fuzzy), ↓ lists all of them, Enter
+// picks one. A tag that does not exist yet is created by picking
+// "+ new tag" or by typing it followed by a comma.
+func attachTagPicker(field *tview.InputField, usage map[string]int) {
+	labels := map[string]string{} // dropdown label -> tag
+
+	attachSuggestions(field, func(text string, all bool) []string {
 		done, current := splitTagInput(text)
 		if current == "" && !all {
 			return nil
@@ -123,18 +153,12 @@ func attachTagPicker(field *tview.InputField, usage map[string]int) {
 			entries = append(entries, label)
 		}
 		return entries
-	})
-
-	field.SetAutocompletedFunc(func(label string, _ int, source int) bool {
-		if source == tview.AutocompletedNavigate {
-			return false
-		}
+	}, func(label string) {
 		tag, ok := labels[label]
 		if !ok {
-			return true
+			return
 		}
 		done, _ := splitTagInput(field.GetText())
 		field.SetText(strings.Join(append(done, tag), ", ") + ", ")
-		return true
 	})
 }

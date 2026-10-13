@@ -21,13 +21,13 @@ func serverRowCells(s domain.Server) []*tview.TableCell {
 	cell := func(text string, color tcell.Color) *tview.TableCell {
 		return tview.NewTableCell(tview.Escape(text)).SetTextColor(color).SetMaxWidth(32)
 	}
-	mark := " "
-	markColor := tcell.Color252
-	switch {
-	case isForwarding != nil && isForwarding(s.ID):
-		mark, markColor = "F", tcell.NewHexColor(0xA0FFA0)
-	case !s.PinnedAt.IsZero():
-		mark, markColor = "★", tcell.NewHexColor(0xFFD75F)
+	mark := ""
+	markColor := tcell.NewHexColor(0xA0FFA0)
+	if !s.PinnedAt.IsZero() {
+		mark = "📌"
+	}
+	if isForwarding != nil && isForwarding(s.ID) {
+		mark += "F" // active port forward
 	}
 	authText, authColor := authShort(s)
 	user := s.User

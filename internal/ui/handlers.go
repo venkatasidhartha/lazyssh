@@ -52,6 +52,10 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	case 'g':
 		t.handlePingSelected()
 	case 'r':
+		if err := t.store.Reload(); err != nil {
+			t.showStatusError("Refresh failed: " + err.Error())
+			return nil
+		}
 		t.refreshServerList()
 		t.showStatusTemp(fmt.Sprintf("Refreshed %d servers", t.serverList.GetItemCount()))
 	case 't':
@@ -375,30 +379,42 @@ func (t *App) showPortForwardForm(s domain.Server) {
 	bindField := tview.NewInputField().SetLabel("Bind Address (optional)").SetFieldWidth(40)
 
 	dd := tview.NewDropDown().SetLabel("Type")
+	// Note: fields are relabelled rather than disabled. tview moves focus
+	// when a field is disabled, which breaks Tab right after choosing a type.
 	dd.SetOptions(kinds, func(_ string, i int) {
 		kind = i
-		dynamic := kinds[i] == string(sshx.ForwardDynamic)
-		hostField.SetDisabled(dynamic)
-		hostPortField.SetDisabled(dynamic)
+		if kinds[i] == string(sshx.ForwardDynamic) {
+			hostField.SetLabel("Host (unused)")
+			hostPortField.SetLabel("Host Port (unused)")
+		} else {
+			hostField.SetLabel("Host")
+			hostPortField.SetLabel("Host Port")
+		}
 	})
 	dd.SetCurrentOption(0)
 	form.AddFormItem(dd).AddFormItem(portField).AddFormItem(hostField).AddFormItem(hostPortField).AddFormItem(bindField)
 
+	// Errors are shown in a popup: the status bar is hidden behind the form.
+	showErr := func(msg string) {
+		modal := tview.NewModal().SetText(msg).AddButtons([]string{"OK"}).
+			SetDoneFunc(func(int, string) { t.app.SetRoot(form, true).SetFocus(form) })
+		t.app.SetRoot(modal, true)
+	}
 	form.AddButton("Start", func() {
 		spec := sshx.ForwardSpec{Kind: sshx.ForwardKind(kinds[kind]), Bind: strings.TrimSpace(bindField.GetText())}
 		var err error
 		if spec.Port, err = parsePort(portField.GetText()); err != nil {
-			t.showStatusError("Invalid port: " + err.Error())
+			showErr("Invalid port: " + err.Error())
 			return
 		}
 		if spec.Kind != sshx.ForwardDynamic {
 			spec.Host = strings.TrimSpace(hostField.GetText())
 			if spec.Host == "" {
-				t.showStatusError("Host is required")
+				showErr("Host is required")
 				return
 			}
 			if spec.HostPort, err = parsePort(hostPortField.GetText()); err != nil {
-				t.showStatusError("Invalid host port: " + err.Error())
+				showErr("Invalid host port: " + err.Error())
 				return
 			}
 		}
@@ -432,8 +448,15 @@ func (t *App) showStatusError(msg string) { t.showStatusTempColor(msg, "#FF6B6B"
 
 func (t *App) showStatusTempColor(msg, color string) {
 	t.statusBar.SetText("[" + color + "]" + tview.Escape(msg) + "[-]")
+	t.statusGen++
+	gen := t.statusGen
 	time.AfterFunc(3*time.Second, func() {
-		t.app.QueueUpdateDraw(func() { t.statusBar.SetText(DefaultStatusText()) })
+		t.app.QueueUpdateDraw(func() {
+			// Only the newest message's timer restores the default text.
+			if t.statusGen == gen {
+				t.statusBar.SetText(DefaultStatusText())
+			}
+		})
 	})
 }
 

@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -146,8 +147,8 @@ func (s *SearchBar) OnNavigate(fn func(int)) *SearchBar  { s.onNavigate = fn; re
 var serverColumns = []string{"", "NAME", "HOST / IP", "USER", "AUTH", "LAST SSH", "TAGS"}
 
 // ServerList shows servers as a table with a fixed header row. Row i+1
-// holds servers[i]. Only plain characters are used so columns line up in
-// every terminal.
+// holds servers[i]. Column widths come from the content, so long names
+// cannot push other columns out of line.
 type ServerList struct {
 	*tview.Table
 	servers           []domain.Server
@@ -276,7 +277,8 @@ func (sl *ServerList) OnActivate(fn func(domain.Server)) *ServerList {
 
 type ServerDetails struct {
 	*tview.TextView
-	onEye func() // the clickable "show"/"hide" next to the password
+	onEye      func() // the clickable "show"/"hide" next to the password
+	managedKey string // path of the key lazyssh installs on servers
 }
 
 func NewServerDetails() *ServerDetails {
@@ -300,6 +302,20 @@ func NewServerDetails() *ServerDetails {
 	return sd
 }
 
+// SetManagedKeyPath sets the path shown for servers using the managed key.
+func (sd *ServerDetails) SetManagedKeyPath(p string) *ServerDetails {
+	sd.managedKey = p
+	return sd
+}
+
+// tildePath shortens a path under the home directory to ~/...
+func tildePath(p string) string {
+	if home, err := os.UserHomeDir(); err == nil && home != "" && strings.HasPrefix(p, home+"/") {
+		return "~" + p[len(home):]
+	}
+	return p
+}
+
 // OnEye sets what happens when the password show/hide button is clicked.
 func (sd *ServerDetails) OnEye(fn func()) *ServerDetails { sd.onEye = fn; return sd }
 
@@ -314,22 +330,25 @@ func (sd *ServerDetails) UpdateServer(s domain.Server, forwards []string, reveal
 	if port == 0 {
 		port = 22
 	}
-	key := s.KeyPath
-	if key == "" && s.KeyState == domain.KeyInstalled {
-		key = "lazyssh managed key"
+	key := "[#888888]none[-]"
+	switch {
+	case s.KeyPath != "":
+		key = "[white]" + tview.Escape(s.KeyPath) + "[-]"
+	case s.KeyState == domain.KeyInstalled && sd.managedKey != "":
+		key = "[white]" + tview.Escape(tildePath(sd.managedKey)) + "[-] [#888888](managed)[-]"
 	}
 	pw := "[#888888]not set[-]"
 	switch {
 	case s.Password != "" && revealPassword:
-		pw = "[#FFD75F::b]" + tview.Escape(s.Password) + "[-:-:-]  [\"eye\"][#55D7FF::u]hide[-:-:-][\"\"]"
+		pw = "[#FFD75F]" + tview.Escape(s.Password) + "[-]  " + eyeButton("hide")
 	case s.Password != "":
-		pw = "[white]••••••••[-]  [\"eye\"][#55D7FF::u]show[-:-:-][\"\"]"
+		pw = "[white]••••••••[-]  " + eyeButton("show")
 	}
 
 	text := fmt.Sprintf(
-		"[::b]%s[-]\n\n[::b]Basic Settings:[-]\n  Host: [white]%s[-]\n  User: [white]%s[-]\n  Port: [white]%d[-]\n  Key:  [white]%s[-]\n  Password: %s\n  Tags: %s\n  Pinned: [white]%t[-]\n  Last SSH: %s\n  SSH Count: [white]%d[-]\n",
+		"[::b]%s[-]\n\n[::b]Basic Settings:[-]\n  Host: [white]%s[-]\n  User: [white]%s[-]\n  Port: [white]%d[-]\n  Key:  %s\n  Password: %s\n  Tags: %s\n  Pinned: [white]%t[-]\n  Last SSH: %s\n  SSH Count: [white]%d[-]\n",
 		tview.Escape(s.Alias), tview.Escape(s.Host), tview.Escape(s.User), port,
-		tview.Escape(key), pw, renderTagChips(s.Tags), !s.PinnedAt.IsZero(), lastSeen, s.SSHCount)
+		key, pw, renderTagChips(s.Tags), !s.PinnedAt.IsZero(), lastSeen, s.SSHCount)
 
 	text += "\n[::b]Authentication:[-]\n  Mode: [white]" + string(s.Auth) + "[-]\n  Login: " + authColor(s) + tview.Escape(s.AuthLabel()) + "[-]\n"
 	if s.KeyNote != "" {
@@ -345,6 +364,12 @@ func (sd *ServerDetails) UpdateServer(s domain.Server, forwards []string, reveal
 	text += "\n[::b]Commands:[-]\n  Enter: SSH connect\n  f: Port forward\n  x: Stop forwarding\n  c: Copy SSH command\n  g: Ping server\n  r: Refresh list\n  a: Add new server\n  e: Edit entry\n  t: Edit tags\n  d: Delete entry\n  p: Pin/Unpin\n  s/S: Sort / reverse\n  v: Show/hide password\n  y: Copy password\n  K: Redo key setup"
 	sd.TextView.SetText(text)
 	sd.TextView.ScrollToBeginning()
+}
+
+// eyeButton is the clickable [show]/[hide] next to the password. It uses a
+// plain colour only: underline/bold attributes leaked into later lines.
+func eyeButton(label string) string {
+	return `["eye"][#55D7FF]` + tview.Escape("["+label+"]") + `[-][""]`
 }
 
 func authColor(s domain.Server) string {

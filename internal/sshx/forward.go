@@ -138,9 +138,26 @@ func (fw *forward) handle(c net.Conn) {
 		return
 	}
 	defer remote.Close()
+	pipe(c, remote)
+}
+
+// pipe copies in both directions until both are finished. When one side
+// stops sending, only that direction is closed (half-close), so replies
+// still in flight are delivered — like OpenSSH does.
+func pipe(a, b net.Conn) {
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(remote, c); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(c, remote); done <- struct{}{} }()
+	cp := func(dst, src net.Conn) {
+		_, _ = io.Copy(dst, src)
+		if cw, ok := dst.(interface{ CloseWrite() error }); ok {
+			_ = cw.CloseWrite()
+		} else {
+			_ = dst.Close()
+		}
+		done <- struct{}{}
+	}
+	go cp(b, a)
+	go cp(a, b)
+	<-done
 	<-done
 }
 

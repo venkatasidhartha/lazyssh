@@ -35,6 +35,7 @@ type App struct {
 	revealGen int    // invalidates older auto-hide timers
 
 	suspended atomic.Bool // an SSH session owns the terminal
+	statusGen int         // only the newest status message may be cleared
 }
 
 func New(st *store.Store, conn *sshx.Connector, version string) *App {
@@ -85,7 +86,7 @@ func (t *App) buildComponents() {
 		OnSelectionChange(t.handleServerSelectionChange).
 		OnReturnToSearch(t.handleSearchFocus).
 		OnActivate(func(domain.Server) { t.handleServerConnect() })
-	t.details = NewServerDetails().OnEye(func() {
+	t.details = NewServerDetails().SetManagedKeyPath(t.connector.Key.Path).OnEye(func() {
 		t.handleTogglePassword()
 		t.app.SetFocus(t.serverList)
 	})
@@ -114,8 +115,8 @@ func (t *App) buildLayout() {
 		AddItem(t.statusBar, 1, 0, false)
 }
 
-// tick redraws every second for the header clock and refreshes the list
-// every 30 seconds so "Last SSH" stays current. It pauses while an SSH
+// tick redraws every second for the header clock and reloads the list
+// every 30 seconds so "Last SSH" and changes from other windows show up. It pauses while an SSH
 // session has the terminal.
 func (t *App) tick(stop <-chan struct{}) {
 	ticker := time.NewTicker(time.Second)
@@ -131,7 +132,9 @@ func (t *App) tick(stop <-chan struct{}) {
 		}
 		refresh := n%30 == 0
 		t.app.QueueUpdateDraw(func() {
-			if refresh {
+			// Pick up changes from other lazyssh windows; keep the
+			// current list if the file cannot be read.
+			if refresh && t.store.Reload() == nil {
 				t.refreshServerList()
 			}
 		})

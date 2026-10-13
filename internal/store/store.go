@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"lazyssh/internal/domain"
@@ -66,7 +67,7 @@ func Open(dir string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{dir: dir, path: filepath.Join(dir, "servers.json"), box: box}
-	if err := s.load(); err != nil {
+	if err := s.Reload(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -74,28 +75,85 @@ func Open(dir string) (*Store, error) {
 
 func (s *Store) Path() string { return s.path }
 
-func (s *Store) load() error {
+// readDisk returns the servers currently saved on disk (none if the file
+// does not exist yet).
+func (s *Store) readDisk() ([]domain.Server, error) {
 	data, err := os.ReadFile(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	var f fileFormat
 	if err := json.Unmarshal(data, &f); err != nil {
-		return fmt.Errorf("parse %s: %w (a backup is kept at %s.bak)", s.path, err, s.path)
+		return nil, fmt.Errorf("parse %s: %w (the previous version is kept at %s.bak)", s.path, err, s.path)
 	}
+	servers := make([]domain.Server, 0, len(f.Servers))
 	for _, r := range f.Servers {
 		srv := r.Server
 		pw, err := s.box.open(r.PasswordEnc)
 		if err != nil {
-			return fmt.Errorf("decrypt password for %q: %w", srv.Alias, err)
+			return nil, fmt.Errorf("decrypt password for %q: %w", srv.Alias, err)
 		}
 		srv.Password = pw
-		s.servers = append(s.servers, srv)
+		servers = append(servers, srv)
+	}
+	return servers, nil
+}
+
+// Reload re-reads the file, picking up changes made by another lazyssh
+// running at the same time. On error the current list is kept.
+func (s *Store) Reload() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	servers, err := s.readDisk()
+	if err != nil {
+		return err
+	}
+	s.servers = servers
+	return nil
+}
+
+// transact runs fn on the latest saved list while holding an exclusive
+// file lock, then saves. Re-reading first means two lazyssh windows never
+// overwrite each other's changes. If fn or the save fails, nothing changes.
+func (s *Store) transact(fn func() error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lock, err := os.OpenFile(filepath.Join(s.dir, ".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN) //nolint:errcheck
+
+	latest, err := s.readDisk()
+	if err != nil {
+		return err // never overwrite a file we could not read
+	}
+	s.servers = cloneServers(latest)
+	if err := fn(); err != nil {
+		s.servers = latest
+		return err
+	}
+	if err := s.save(); err != nil {
+		s.servers = latest
+		return err
 	}
 	return nil
+}
+
+func cloneServers(in []domain.Server) []domain.Server {
+	out := make([]domain.Server, len(in))
+	for i, srv := range in {
+		srv.Tags = append([]string(nil), srv.Tags...)
+		out[i] = srv
+	}
+	return out
 }
 
 // save writes atomically (temp file + rename) and keeps the previous file
@@ -142,12 +200,7 @@ func (s *Store) save() error {
 func (s *Store) List() []domain.Server {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := make([]domain.Server, len(s.servers))
-	for i, srv := range s.servers {
-		srv.Tags = append([]string(nil), srv.Tags...)
-		out[i] = srv
-	}
-	return out
+	return cloneServers(s.servers)
 }
 
 func (s *Store) Get(id string) (domain.Server, bool) {
@@ -179,74 +232,57 @@ func (s *Store) aliasTaken(alias, exceptID string) bool {
 
 // Add stores a new server and returns it with its generated ID.
 func (s *Store) Add(srv domain.Server) (domain.Server, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.aliasTaken(srv.Alias, "") {
-		return srv, fmt.Errorf("alias %q already exists", srv.Alias)
-	}
-	srv.ID = newID()
-	now := time.Now()
-	srv.CreatedAt, srv.UpdatedAt = now, now
-	s.servers = append(s.servers, srv)
-	if err := s.save(); err != nil {
-		s.servers = s.servers[:len(s.servers)-1]
-		return srv, err
-	}
-	return srv, nil
+	err := s.transact(func() error {
+		if s.aliasTaken(srv.Alias, "") {
+			return fmt.Errorf("alias %q already exists", srv.Alias)
+		}
+		srv.ID = newID()
+		now := time.Now()
+		srv.CreatedAt, srv.UpdatedAt = now, now
+		s.servers = append(s.servers, srv)
+		return nil
+	})
+	return srv, err
 }
 
 // Update replaces the server with the same ID.
 func (s *Store) Update(srv domain.Server) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	i := s.indexOf(srv.ID)
-	if i < 0 {
-		return fmt.Errorf("server %q not found", srv.Alias)
-	}
-	if s.aliasTaken(srv.Alias, srv.ID) {
-		return fmt.Errorf("alias %q already exists", srv.Alias)
-	}
-	prev := s.servers[i]
-	srv.UpdatedAt = time.Now()
-	s.servers[i] = srv
-	if err := s.save(); err != nil {
-		s.servers[i] = prev
-		return err
-	}
-	return nil
+	return s.transact(func() error {
+		i := s.indexOf(srv.ID)
+		if i < 0 {
+			return fmt.Errorf("server %q no longer exists (deleted in another window?)", srv.Alias)
+		}
+		if s.aliasTaken(srv.Alias, srv.ID) {
+			return fmt.Errorf("alias %q already exists", srv.Alias)
+		}
+		srv.UpdatedAt = time.Now()
+		s.servers[i] = srv
+		return nil
+	})
 }
 
 // Mutate applies fn to the stored server with the given ID and saves.
 func (s *Store) Mutate(id string, fn func(*domain.Server)) (domain.Server, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	i := s.indexOf(id)
-	if i < 0 {
-		return domain.Server{}, errors.New("server not found")
-	}
-	prev := s.servers[i]
-	fn(&s.servers[i])
-	if err := s.save(); err != nil {
-		s.servers[i] = prev
-		return prev, err
-	}
-	return s.servers[i], nil
+	var out domain.Server
+	err := s.transact(func() error {
+		i := s.indexOf(id)
+		if i < 0 {
+			return errors.New("server not found (deleted in another window?)")
+		}
+		fn(&s.servers[i])
+		out = s.servers[i]
+		return nil
+	})
+	return out, err
 }
 
 func (s *Store) Delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	i := s.indexOf(id)
-	if i < 0 {
+	return s.transact(func() error {
+		if i := s.indexOf(id); i >= 0 {
+			s.servers = append(s.servers[:i], s.servers[i+1:]...)
+		}
 		return nil
-	}
-	prev := append([]domain.Server(nil), s.servers...)
-	s.servers = append(s.servers[:i], s.servers[i+1:]...)
-	if err := s.save(); err != nil {
-		s.servers = prev
-		return err
-	}
-	return nil
+	})
 }
 
 func newID() string {

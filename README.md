@@ -81,18 +81,24 @@ instead of the Debian/Ubuntu paths.
 - **Fuzzy search** by name, IP address, user or tag (`/`). Type several words
   to narrow the list, e.g. `prod db`. Use `#tag` to match a tag exactly.
 - **Table view** with NAME, HOST / IP, USER, AUTH, LAST SSH and TAGS
-  columns. Pinned servers are marked ★, and servers with active port
+  columns. Pinned servers are marked 📌, and servers with active port
   forwards are marked F.
 - **Add or edit servers** (`a` / `e`) with alias, IP, user, port, password,
   optional key file and tags. Press Ctrl+R in the form to show the
   password.
 - **Tag picker**: type in the Tags field to search existing tags, or press
-  ↓ to list them all. Enter picks the highlighted tag. To add a new tag,
+  ↓ to list them all. Enter picks the highlighted tag; Tab moves to the next
+  field without picking anything. The SSH Key field works the same way,
+  suggesting keys from `~/.ssh`. To add a new tag,
   type it and press `,`. Separate several tags with commas.
 - **Show and copy passwords**: press `v` (or click **show** in Details) to
   show the selected server's password. It hides again after 30 seconds.
   Press `y` to copy it to the clipboard so you can share it with your team.
 - **Live clock** in the header, with seconds and time zone.
+- **Safe with several windows**: every change re-reads `servers.json` under
+  a file lock, so two open lazyssh windows never overwrite each other. `r`
+  and a 30-second auto-refresh pick up changes from other windows. If the
+  file is damaged, lazyssh refuses to write to it instead of replacing it.
 - **One-key connect**: press `Enter`, or click a server that is already
   selected.
   - **First login** uses the password. lazyssh then installs its own ed25519

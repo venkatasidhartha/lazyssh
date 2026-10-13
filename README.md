@@ -41,6 +41,27 @@ curl -fsSL .../install.sh | sh -s -- --uninstall --purge   # deletes them too
 
 Run `sh install.sh --help` to see every option.
 
+### Company network: "self-signed certificate in certificate chain"
+
+Some company firewalls and proxies inspect HTTPS (for example FortiGate or
+Zscaler). The machine then does not trust the certificates it sees, so curl
+fails and `wget -q` fails without printing anything. To fix it, pick one:
+
+```sh
+# 1. Best: trust your company's root CA system-wide (get the .crt from IT)
+sudo cp company-ca.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates
+curl -fsSL https://raw.githubusercontent.com/venkatasidhartha/lazyssh/develop/install.sh | sh
+
+# 2. Trust the CA only for this install
+curl -fsSL --cacert company-ca.crt https://raw.githubusercontent.com/venkatasidhartha/lazyssh/develop/install.sh | sh -s -- --ca-cert company-ca.crt
+
+# 3. Skip the certificate check (only on a network you trust)
+curl -fsSLk https://raw.githubusercontent.com/venkatasidhartha/lazyssh/develop/install.sh | sh -s -- --insecure
+```
+
+On RHEL or Fedora, use `/etc/pki/ca-trust/source/anchors/` and `sudo update-ca-trust`
+instead of the Debian/Ubuntu paths.
+
 ## Features
 
 - **Fuzzy search** by name, IP address, user or tag (`/`). Type several words

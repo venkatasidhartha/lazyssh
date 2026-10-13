@@ -12,16 +12,26 @@
 #   --no-deps       do not install the OpenSSH client if it is missing
 #   --uninstall     remove the lazyssh binary (keeps saved servers)
 #   --purge         with --uninstall: also delete saved servers and keys
+#   --ca-cert FILE  trust this CA certificate (corporate HTTPS inspection)
+#   --insecure      skip HTTPS certificate checks (trusted networks only)
 #
 # Environment:
 #   LAZYSSH_REF       branch or tag to install from (default: develop)
 #   LAZYSSH_BASE_URL  override download location (directory with the binaries)
 #   GITHUB_TOKEN      token for downloading from a private repository
+#   LAZYSSH_CA_CERT   same as --ca-cert
+#   LAZYSSH_INSECURE  set to 1 for the same effect as --insecure
+#
+# Behind a corporate proxy that inspects HTTPS ("self-signed certificate in
+# certificate chain"), fetch the script the same way you pass the option:
+#   curl -fsSL --cacert company-ca.crt URL/install.sh | sh -s -- --ca-cert company-ca.crt
+#   curl -fsSLk URL/install.sh | sh -s -- --insecure
 set -eu
 
 REPO="venkatasidhartha/lazyssh"
 REF="${LAZYSSH_REF:-develop}"
 BASE_URL="${LAZYSSH_BASE_URL:-https://raw.githubusercontent.com/$REPO/$REF/dist}"
+SCRIPT_URL="https://raw.githubusercontent.com/$REPO/$REF/install.sh"
 BIN_NAME="lazyssh"
 PATH_MARKER="# added by lazyssh installer"
 
@@ -31,6 +41,8 @@ FORCE=0
 NO_DEPS=0
 UNINSTALL=0
 PURGE=0
+CA_CERT="${LAZYSSH_CA_CERT:-}"
+INSECURE="${LAZYSSH_INSECURE:-0}"
 
 # --- output -----------------------------------------------------------------
 
@@ -52,6 +64,7 @@ usage() {
 lazyssh installer
 
 Usage: install.sh [--user] [--bin-dir DIR] [--force] [--no-deps]
+                  [--ca-cert FILE] [--insecure]
        install.sh --uninstall [--purge]
 
   --user          install into ~/.local/bin (no sudo)
@@ -60,9 +73,11 @@ Usage: install.sh [--user] [--bin-dir DIR] [--force] [--no-deps]
   --no-deps       do not install the OpenSSH client if it is missing
   --uninstall     remove the lazyssh binary (keeps saved servers)
   --purge         with --uninstall: also delete saved servers and keys
+  --ca-cert FILE  trust this CA certificate (corporate HTTPS inspection)
+  --insecure      skip HTTPS certificate checks (trusted networks only)
 
 Environment: LAZYSSH_REF (branch/tag, default develop), LAZYSSH_BASE_URL,
-GITHUB_TOKEN (for a private repository)
+GITHUB_TOKEN (for a private repository), LAZYSSH_CA_CERT, LAZYSSH_INSECURE=1
 USAGE
 	exit 0
 }
@@ -80,6 +95,13 @@ while [ $# -gt 0 ]; do
 	--bin-dir=*) BIN_DIR="${1#*=}" ;;
 	--force) FORCE=1 ;;
 	--no-deps) NO_DEPS=1 ;;
+	--insecure) INSECURE=1 ;;
+	--ca-cert)
+		[ $# -ge 2 ] || die "--ca-cert needs a file"
+		CA_CERT="$2"
+		shift
+		;;
+	--ca-cert=*) CA_CERT="${1#*=}" ;;
 	--uninstall) UNINSTALL=1 ;;
 	--purge) PURGE=1 ;;
 	-h | --help) usage ;;
@@ -111,23 +133,53 @@ as_root() {
 	fi
 }
 
-# download URL DEST
+# download URL DEST — on failure prints the real error and, for HTTPS
+# certificate problems, how to fix them; then exits.
 download() {
+	_url="$1"
+	_dest="$2"
+	_err="$TMP/download.err"
 	if have curl; then
-		if [ -n "${GITHUB_TOKEN:-}" ]; then
-			curl -fsSL --retry 3 -H "Authorization: token $GITHUB_TOKEN" -o "$2" "$1"
-		else
-			curl -fsSL --retry 3 -o "$2" "$1"
-		fi
+		set -- -fsSL --retry 2 --connect-timeout 20
+		[ "$INSECURE" = "1" ] && set -- "$@" --insecure
+		[ -n "$CA_CERT" ] && set -- "$@" --cacert "$CA_CERT"
+		[ -n "${GITHUB_TOKEN:-}" ] && set -- "$@" -H "Authorization: token $GITHUB_TOKEN"
+		curl "$@" -o "$_dest" "$_url" 2>"$_err" && return 0
 	elif have wget; then
-		if [ -n "${GITHUB_TOKEN:-}" ]; then
-			wget -q --header "Authorization: token $GITHUB_TOKEN" -O "$2" "$1"
-		else
-			wget -q -O "$2" "$1"
-		fi
+		set -- -q -T 30 -t 2
+		[ "$INSECURE" = "1" ] && set -- "$@" --no-check-certificate
+		[ -n "$CA_CERT" ] && set -- "$@" "--ca-certificate=$CA_CERT"
+		[ -n "${GITHUB_TOKEN:-}" ] && set -- "$@" --header "Authorization: token $GITHUB_TOKEN"
+		wget "$@" -O "$_dest" "$_url" 2>"$_err" && return 0
+		_rc=$?
+		# wget exit code 5 = SSL verification failure (and -q prints nothing)
+		[ "$_rc" -eq 5 ] && echo "wget: SSL certificate verification failed" >>"$_err"
+		[ -s "$_err" ] || echo "wget: exit code $_rc" >"$_err"
 	else
 		die "curl or wget is required"
 	fi
+
+	printf "${C_RED}✗ download failed:${C_OFF} %s\n" "$_url" >&2
+	sed 's/^/    /' "$_err" >&2
+	if grep -qiE "certificate|ssl|tls" "$_err"; then
+		cat >&2 <<HELP
+
+  Your network intercepts HTTPS (corporate proxy or firewall such as
+  FortiGate or Zscaler) and this machine does not trust its certificate.
+
+  Best fix: get your company's root CA certificate from IT, then run:
+      sudo cp company-ca.crt /usr/local/share/ca-certificates/
+      sudo update-ca-certificates        # Debian / Ubuntu
+      # (RHEL / Fedora: copy to /etc/pki/ca-trust/source/anchors/ and run update-ca-trust)
+
+  Or tell the installer to trust it just for this install:
+      curl -fsSL --cacert company-ca.crt $SCRIPT_URL | sh -s -- --ca-cert company-ca.crt
+
+  Or skip the check, but only on a network you trust:
+      curl -fsSLk $SCRIPT_URL | sh -s -- --insecure
+HELP
+	fi
+	exit 1
 }
 
 sha256() {
@@ -308,7 +360,13 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT INT TERM
 
 info "checking latest version ($REPO@$REF)"
-download "$BASE_URL/VERSION" "$TMP/VERSION" || die "cannot reach $BASE_URL — check your network or LAZYSSH_REF"
+if [ -n "$CA_CERT" ] && [ ! -r "$CA_CERT" ]; then
+	die "CA certificate not found: $CA_CERT"
+fi
+if [ "$INSECURE" = "1" ]; then
+	warn "HTTPS certificate checks are disabled (--insecure)"
+fi
+download "$BASE_URL/VERSION" "$TMP/VERSION"
 LATEST="$(tr -d ' \r\n' <"$TMP/VERSION")"
 CURRENT="$(installed_version "$TARGET")"
 
@@ -319,8 +377,8 @@ if [ "$FORCE" -eq 0 ] && [ -n "$CURRENT" ] && [ "$CURRENT" = "$LATEST" ]; then
 fi
 
 info "downloading $ASSET $LATEST"
-download "$BASE_URL/$ASSET" "$TMP/$BIN_NAME" || die "download failed: $BASE_URL/$ASSET"
-download "$BASE_URL/SHA256SUMS" "$TMP/SHA256SUMS" || die "download failed: SHA256SUMS"
+download "$BASE_URL/$ASSET" "$TMP/$BIN_NAME"
+download "$BASE_URL/SHA256SUMS" "$TMP/SHA256SUMS"
 
 want="$(awk -v f="$ASSET" '$2 == f || $2 == "*"f {print $1}' "$TMP/SHA256SUMS")"
 got="$(sha256 "$TMP/$BIN_NAME")"

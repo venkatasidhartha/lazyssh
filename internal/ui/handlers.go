@@ -13,9 +13,9 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"hopssh/internal/domain"
-	"hopssh/internal/search"
-	"hopssh/internal/sshx"
+	"lazyssh/internal/domain"
+	"lazyssh/internal/search"
+	"lazyssh/internal/sshx"
 )
 
 func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
@@ -125,7 +125,7 @@ func (t *App) refreshServerList() {
 	t.serverList.UpdateServers(servers, selectID)
 	switch {
 	case len(all) == 0:
-		t.details.ShowEmpty("\n  [::b]Welcome to hopssh![-]\n\n  No servers yet.\n\n  Press [#55D7FF::b]a[-] to add your first server.\n\n  Enter the IP, user and password once —\n  hopssh logs in with the password, installs\n  an SSH key and uses the key from then on.\n  Servers that refuse keys keep using the\n  saved (encrypted) password automatically.")
+		t.details.ShowEmpty("\n  [::b]Welcome to lazyssh![-]\n\n  No servers yet.\n\n  Press [#55D7FF::b]a[-] to add your first server.\n\n  Enter the IP, user and password once —\n  lazyssh logs in with the password, installs\n  an SSH key and uses the key from then on.\n  Servers that refuse keys keep using the\n  saved (encrypted) password automatically.")
 	case len(servers) == 0:
 		t.details.ShowEmpty("No servers match the current filter.")
 	}
@@ -138,7 +138,7 @@ func (t *App) handleServerConnect() {
 	}
 	t.app.Suspend(func() {
 		fmt.Print("\x1b[2J\x1b[H")
-		fmt.Printf("🚀 \x1b[1mhop\x1b[38;5;81mssh\x1b[0m → \x1b[1m%s\x1b[0m (%s)\n", s.Alias, s.Target())
+		fmt.Printf("🚀 \x1b[1mlazy\x1b[38;5;81mssh\x1b[0m → \x1b[1m%s\x1b[0m (%s)\n", s.Alias, s.Target())
 		err := t.connector.Connect(s)
 		if err == nil {
 			_, _ = t.store.Mutate(s.ID, func(x *domain.Server) {
@@ -147,7 +147,7 @@ func (t *App) handleServerConnect() {
 			})
 			return
 		}
-		fmt.Printf("\n\x1b[38;5;203m✗ %v\x1b[0m\n\nPress Enter to return to hopssh…", err)
+		fmt.Printf("\n\x1b[38;5;203m✗ %v\x1b[0m\n\nPress Enter to return to lazyssh…", err)
 		_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
 	})
 	t.refreshServerList()

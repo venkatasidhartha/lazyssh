@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 func TestRoundTripEncryptsPassword(t *testing.T) {

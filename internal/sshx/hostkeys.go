@@ -107,6 +107,6 @@ func knownHostKeyAlgorithms(addr string) []string {
 // makes knownhosts report every key it does know for the host.
 type probeKey struct{}
 
-func (probeKey) Type() string                        { return "hopssh-probe" }
-func (probeKey) Marshal() []byte                     { return []byte("hopssh-probe") }
+func (probeKey) Type() string                        { return "lazyssh-probe" }
+func (probeKey) Marshal() []byte                     { return []byte("lazyssh-probe") }
 func (probeKey) Verify([]byte, *ssh.Signature) error { return errors.New("probe") }

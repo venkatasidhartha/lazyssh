@@ -8,7 +8,7 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 // ---------------------------------------------------------------------------
@@ -27,7 +27,7 @@ func NewAppHeader(version string, count func() int) *AppHeader {
 
 	left := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignLeft)
 	left.SetBackgroundColor(bg)
-	left.SetText("🚀 [#FFFFFF::b]hop[-][#55D7FF::b]ssh[-]")
+	left.SetText("🚀 [#FFFFFF::b]lazy[-][#55D7FF::b]ssh[-]")
 
 	center := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter)
 	center.SetBackgroundColor(bg)
@@ -258,7 +258,7 @@ func (sd *ServerDetails) UpdateServer(s domain.Server, forwards []string) {
 	}
 	key := s.KeyPath
 	if key == "" && s.KeyState == domain.KeyInstalled {
-		key = "hopssh managed key"
+		key = "lazyssh managed key"
 	}
 	pw := "[#888888]not set[-]"
 	if s.Password != "" {

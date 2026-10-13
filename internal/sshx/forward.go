@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 type ForwardKind string

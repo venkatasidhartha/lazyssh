@@ -1,4 +1,4 @@
-module hopssh
+module lazyssh
 
 go 1.26.0
 

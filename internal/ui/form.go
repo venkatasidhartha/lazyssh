@@ -10,8 +10,8 @@ import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"hopssh/internal/domain"
-	"hopssh/internal/sshx"
+	"lazyssh/internal/domain"
+	"lazyssh/internal/sshx"
 )
 
 var authOptions = []struct {
@@ -28,8 +28,8 @@ var fieldHelp = map[string]string{
 	"Host":     "[::b]Host/IP[-]\n\nIP address or DNS name of the server. [#FF6B6B](required)[-]\n\n[#888888]Examples:[-]\n  10.0.0.10\n  build.example.com",
 	"User":     "[::b]User[-]\n\nRemote login user. Defaults to your local user name when empty.",
 	"Port":     "[::b]Port[-]\n\nSSH port of the server. Default: 22",
-	"Password": "[::b]Password[-]\n\nUsed for the first login. With Auth = Auto, hopssh then installs its own SSH key on the server and uses the key from then on.\n\nIf the server does not allow keys (common on locked-down on-prem hosts), hopssh keeps logging in with this password automatically.\n\nStored encrypted (AES-256-GCM) in ~/.config/hopssh.",
-	"Key":      "[::b]SSH Key[-]\n\nOptional path to an existing private key, e.g. ~/.ssh/id_ed25519. Press Tab for suggestions.\n\nLeave empty to let hopssh manage a key for you.",
+	"Password": "[::b]Password[-]\n\nUsed for the first login. With Auth = Auto, lazyssh then installs its own SSH key on the server and uses the key from then on.\n\nIf the server does not allow keys (common on locked-down on-prem hosts), lazyssh keeps logging in with this password automatically.\n\nStored encrypted (AES-256-GCM) in ~/.config/lazyssh.",
+	"Key":      "[::b]SSH Key[-]\n\nOptional path to an existing private key, e.g. ~/.ssh/id_ed25519. Press Tab for suggestions.\n\nLeave empty to let lazyssh manage a key for you.",
 	"Auth":     "[::b]Authentication[-]\n\n[#55D7FF]Auto[-]: password on first login → key installed and verified → key used afterwards. Falls back to password if the server refuses keys.\n\n[#55D7FF]Password only[-]: always log in with the saved password.\n\n[#55D7FF]Key only[-]: use the key file, ssh-agent or your default ~/.ssh keys.",
 	"Tags":     "[::b]Tags[-]\n\nComma separated labels used for grouping and search.\n\n[#888888]Example:[-]\n  prod, db, onprem",
 }

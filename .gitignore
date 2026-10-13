@@ -1,5 +1,5 @@
 # build output
-/hopssh
+/lazyssh
 
 # credentials: never commit
 git_username_token

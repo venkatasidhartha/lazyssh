@@ -17,7 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 const dialTimeout = 15 * time.Second
@@ -79,7 +79,7 @@ func (c *Connector) Connect(s domain.Server) error {
 		if !isAuthError(err) {
 			return err
 		}
-		c.warnf("The hopssh key is no longer accepted by %s", s.Host)
+		c.warnf("The lazyssh key is no longer accepted by %s", s.Host)
 		s.KeyState, s.KeyNote = domain.KeyUnknown, ""
 		c.persist(s)
 		if s.Password == "" {
@@ -140,16 +140,16 @@ func (c *Connector) dialPassword(s domain.Server) (*ssh.Client, domain.Server, e
 
 // installKey appends the managed public key to ~/.ssh/authorized_keys and
 // verifies a key-only login works. On verification failure the line is
-// removed again (if hopssh added it).
+// removed again (if lazyssh added it).
 func (c *Connector) installKey(client *ssh.Client, s domain.Server) (string, error) {
-	c.logf("Installing hopssh key on %s", s.Host)
+	c.logf("Installing lazyssh key on %s", s.Host)
 	k := shellQuote(c.Key.Public)
 	install := "umask 077; mkdir -p ~/.ssh && touch ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys && " +
-		"if grep -qxF " + k + " ~/.ssh/authorized_keys; then echo HOPSSH_PRESENT; else printf '%s\\n' " + k + " >> ~/.ssh/authorized_keys && echo HOPSSH_ADDED; fi; " +
+		"if grep -qxF " + k + " ~/.ssh/authorized_keys; then echo LAZYSSH_PRESENT; else printf '%s\\n' " + k + " >> ~/.ssh/authorized_keys && echo LAZYSSH_ADDED; fi; " +
 		"command -v restorecon >/dev/null 2>&1 && restorecon -R ~/.ssh >/dev/null 2>&1; true"
 	out, err := run(client, install)
-	added := strings.Contains(out, "HOPSSH_ADDED")
-	if !added && !strings.Contains(out, "HOPSSH_PRESENT") {
+	added := strings.Contains(out, "LAZYSSH_ADDED")
+	if !added && !strings.Contains(out, "LAZYSSH_PRESENT") {
 		msg := firstLine(out)
 		if msg == "" && err != nil {
 			msg = err.Error()
@@ -161,7 +161,7 @@ func (c *Connector) installKey(client *ssh.Client, s domain.Server) (string, err
 	}
 	if err := c.probe(s, ssh.PublicKeys(c.Key.Signer)); err != nil {
 		if added {
-			_, _ = run(client, "grep -vxF "+k+" ~/.ssh/authorized_keys > ~/.ssh/.hopssh.tmp; cat ~/.ssh/.hopssh.tmp > ~/.ssh/authorized_keys; rm -f ~/.ssh/.hopssh.tmp")
+			_, _ = run(client, "grep -vxF "+k+" ~/.ssh/authorized_keys > ~/.ssh/.lazyssh.tmp; cat ~/.ssh/.lazyssh.tmp > ~/.ssh/authorized_keys; rm -f ~/.ssh/.lazyssh.tmp")
 		}
 		if isAuthError(err) {
 			return "server does not accept public keys", err
@@ -354,7 +354,7 @@ func shellQuote(s string) string {
 
 func firstLine(s string) string {
 	for _, l := range strings.Split(s, "\n") {
-		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "HOPSSH_") {
+		if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "LAZYSSH_") {
 			return l
 		}
 	}

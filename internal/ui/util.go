@@ -9,7 +9,7 @@ import (
 	"github.com/mattn/go-runewidth"
 	"github.com/rivo/tview"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 // isForwarding reports whether a server has active port forwards.

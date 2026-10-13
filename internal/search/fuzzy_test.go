@@ -3,7 +3,7 @@ package search
 import (
 	"testing"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 func TestFilter(t *testing.T) {

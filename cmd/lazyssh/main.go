@@ -1,4 +1,4 @@
-// hopssh is a terminal SSH manager: fuzzy search your servers, press Enter
+// lazyssh is a terminal SSH manager: fuzzy search your servers, press Enter
 // to connect. First logins use the password, then an SSH key is installed
 // automatically; servers that refuse keys keep using the saved password.
 package main
@@ -9,27 +9,27 @@ import (
 
 	"golang.org/x/term"
 
-	"hopssh/internal/domain"
-	"hopssh/internal/sshx"
-	"hopssh/internal/store"
-	"hopssh/internal/ui"
+	"lazyssh/internal/domain"
+	"lazyssh/internal/sshx"
+	"lazyssh/internal/store"
+	"lazyssh/internal/ui"
 )
 
-var version = "v0.1.0"
+var version = "dev"
 
 func main() {
 	if len(os.Args) > 1 {
 		switch os.Args[1] {
 		case "-v", "--version", "version":
-			fmt.Println("hopssh", version)
+			fmt.Println("lazyssh", version)
 			return
 		case "-h", "--help", "help":
-			fmt.Println("hopssh — simple terminal SSH manager\n\nUsage: hopssh\n\nData directory: ~/.config/hopssh (override with $HOPSSH_HOME)")
+			fmt.Println("lazyssh — simple terminal SSH manager\n\nUsage: lazyssh\n\nData directory: ~/.config/lazyssh (override with $LAZYSSH_HOME)")
 			return
 		}
 	}
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "hopssh:", err)
+		fmt.Fprintln(os.Stderr, "lazyssh:", err)
 		os.Exit(1)
 	}
 }

@@ -13,7 +13,7 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// ManagedKey is the ed25519 key hopssh generates once and installs on
+// ManagedKey is the ed25519 key lazyssh generates once and installs on
 // servers whose first login used a password.
 type ManagedKey struct {
 	Path   string
@@ -36,7 +36,7 @@ func LoadOrCreateManagedKey(dir string) (*ManagedKey, error) {
 			return nil, err
 		}
 		host, _ := os.Hostname()
-		block, err := ssh.MarshalPrivateKey(priv, "hopssh@"+host)
+		block, err := ssh.MarshalPrivateKey(priv, "lazyssh@"+host)
 		if err != nil {
 			return nil, err
 		}
@@ -48,7 +48,7 @@ func LoadOrCreateManagedKey(dir string) (*ManagedKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		pub := authorizedLine(signer.PublicKey(), "hopssh@"+host)
+		pub := authorizedLine(signer.PublicKey(), "lazyssh@"+host)
 		if err := os.WriteFile(path+".pub", []byte(pub+"\n"), 0o644); err != nil {
 			return nil, err
 		}
@@ -60,7 +60,7 @@ func LoadOrCreateManagedKey(dir string) (*ManagedKey, error) {
 		return nil, fmt.Errorf("parse managed key %s: %w", path, err)
 	}
 	host, _ := os.Hostname()
-	return &ManagedKey{Path: path, Signer: signer, Public: authorizedLine(signer.PublicKey(), "hopssh@"+host)}, nil
+	return &ManagedKey{Path: path, Signer: signer, Public: authorizedLine(signer.PublicKey(), "lazyssh@"+host)}, nil
 }
 
 func authorizedLine(pub ssh.PublicKey, comment string) string {

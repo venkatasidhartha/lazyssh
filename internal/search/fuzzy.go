@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 // Score returns how well pattern fuzzy-matches text (subsequence match,

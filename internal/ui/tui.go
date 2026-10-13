@@ -1,14 +1,14 @@
-// Package ui is the hopssh terminal interface. Its look and key bindings
-// follow lazyssh (github.com/adembc/lazyssh).
+// Package ui is the lazyssh terminal interface. Its look and key bindings
+// follow the original lazyssh by Adembc (github.com/adembc/lazyssh).
 package ui
 
 import (
 	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 
-	"hopssh/internal/domain"
-	"hopssh/internal/sshx"
-	"hopssh/internal/store"
+	"lazyssh/internal/domain"
+	"lazyssh/internal/sshx"
+	"lazyssh/internal/store"
 )
 
 type App struct {

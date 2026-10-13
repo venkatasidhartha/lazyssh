@@ -9,7 +9,7 @@ import (
 type AuthPref string
 
 const (
-	// AuthAuto logs in with the password the first time, installs a hopssh
+	// AuthAuto logs in with the password the first time, installs a lazyssh
 	// managed key and uses that key from then on. If the server refuses the
 	// key, it silently stays on password authentication.
 	AuthAuto AuthPref = "auto"
@@ -19,7 +19,7 @@ const (
 	AuthKey AuthPref = "key"
 )
 
-// KeyStatus records what hopssh learned about key auth for an AuthAuto server.
+// KeyStatus records what lazyssh learned about key auth for an AuthAuto server.
 type KeyStatus string
 
 const (

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"hopssh/internal/domain"
+	"lazyssh/internal/domain"
 )
 
 const fileVersion = 1
@@ -36,17 +36,25 @@ type Store struct {
 	servers []domain.Server
 }
 
-// Dir returns the hopssh data directory (~/.config/hopssh by default,
-// overridable with $HOPSSH_HOME).
+// Dir returns the lazyssh data directory (~/.config/lazyssh by default,
+// overridable with $LAZYSSH_HOME).
 func Dir() (string, error) {
-	if d := os.Getenv("HOPSSH_HOME"); d != "" {
+	if d := os.Getenv("LAZYSSH_HOME"); d != "" {
 		return d, nil
 	}
 	base, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(base, "hopssh"), nil
+	dir := filepath.Join(base, "lazyssh")
+	// The project was called hopssh before; carry its data over once.
+	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
+		old := filepath.Join(base, "hopssh")
+		if _, err := os.Stat(old); err == nil {
+			_ = os.Rename(old, dir)
+		}
+	}
+	return dir, nil
 }
 
 func Open(dir string) (*Store, error) {

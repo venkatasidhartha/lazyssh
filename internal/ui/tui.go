@@ -36,6 +36,9 @@ type App struct {
 
 	suspended atomic.Bool // an SSH session owns the terminal
 	statusGen int         // only the newest status message may be cleared
+
+	workspace   *Workspace // split-pane terminal sessions
+	inWorkspace bool       // the workspace is on screen
 }
 
 func New(st *store.Store, conn *sshx.Connector, version string) *App {
@@ -51,11 +54,19 @@ func New(st *store.Store, conn *sshx.Connector, version string) *App {
 
 func (t *App) Run() error {
 	defer t.forwarder.StopAll()
-	t.app.EnableMouse(true)
+	defer t.closeAllPanes()
+	t.app.EnableMouse(true).EnablePaste(true)
 	t.initializeTheme()
 	t.buildComponents()
 	t.buildLayout()
 	t.root.SetInputCapture(t.handleGlobalKeys)
+	t.workspace = newWorkspace(t)
+	t.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
+		if t.inWorkspace {
+			return t.workspace.handleKey(ev)
+		}
+		return ev
+	})
 	t.refreshServerList()
 	t.app.SetRoot(t.root, true).SetFocus(t.serverList)
 	stop := make(chan struct{})

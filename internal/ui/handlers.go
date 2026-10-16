@@ -24,7 +24,11 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	}
 	switch event.Rune() {
 	case 'q':
-		t.app.Stop()
+		t.handleQuit()
+	case 'w':
+		t.handleOpenWorkspace(false)
+	case 'o':
+		t.handleOpenWorkspace(true)
 	case '/':
 		t.handleSearchFocus()
 	case 'a':
@@ -86,6 +90,49 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		return event
 	}
 	return nil
+}
+
+// handleOpenWorkspace shows the split-pane workspace. With newPane (or an
+// empty workspace) the selected server is opened in a new pane.
+func (t *App) handleOpenWorkspace(newPane bool) {
+	ws := t.workspace
+	if ws.PaneCount() > 0 && !newPane {
+		ws.show()
+		return
+	}
+	s, ok := t.serverList.GetSelectedServer()
+	ws.show()
+	if ok {
+		ws.open(&s, tview.FlexColumn)
+	} else {
+		ws.open(nil, tview.FlexColumn)
+	}
+}
+
+// handleQuit asks before ending running workspace sessions.
+func (t *App) handleQuit() {
+	n := t.workspace.PaneCount()
+	if n == 0 {
+		t.app.Stop()
+		return
+	}
+	modal := tview.NewModal().
+		SetText(fmt.Sprintf("%d workspace session%s still running.\n\nQuit and close them?", n, plural(n))).
+		AddButtons([]string{"Cancel", "Quit"}).
+		SetDoneFunc(func(i int, _ string) {
+			if i == 1 {
+				t.app.Stop()
+				return
+			}
+			t.returnToMain()
+		})
+	t.app.SetRoot(modal, true)
+}
+
+func (t *App) closeAllPanes() {
+	for _, n := range t.workspace.leaves() {
+		n.pane.Close()
+	}
 }
 
 func (t *App) moveSelection(dir int) {

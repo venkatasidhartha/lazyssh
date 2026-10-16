@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -111,7 +112,7 @@ func TestStartSSH(t *testing.T) {
 	if err := StartSSH(p, client); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "banner", func() bool { return strings.Contains(p.vt.String(), "welcome") })
+	eventually(t, "banner", func() bool { return strings.Contains(p.ScreenText(), "welcome") })
 
 	p.Send([]byte("hi there"))
 	eventually(t, "echo", func() bool { return strings.Contains(p.CursorLine(), "hi there") })
@@ -156,5 +157,60 @@ func TestKeyBytes(t *testing.T) {
 		if got := string(keyBytes(c.ev, c.appCursor)); got != c.want {
 			t.Errorf("%s: got %q, want %q", c.ev.Name(), got, c.want)
 		}
+	}
+}
+
+type recordBackend struct {
+	mu  sync.Mutex
+	got strings.Builder
+}
+
+func (r *recordBackend) Write(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.got.Write(p)
+}
+func (r *recordBackend) Resize(int, int) error { return nil }
+func (r *recordBackend) Close() error          { return nil }
+func (r *recordBackend) String() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.got.String()
+}
+
+// A program that enables mouse tracking gets clicks and wheel events;
+// otherwise the wheel scrolls the pane's history.
+func TestMouseForwarding(t *testing.T) {
+	p := NewPane("m", nil)
+	p.SetRect(0, 0, 42, 12) // inner 40x10
+	rec := &recordBackend{}
+	p.Attach(rec)
+	sim := tcell.NewSimulationScreen("UTF-8")
+	_ = sim.Init()
+	sim.SetSize(42, 12)
+	p.Draw(sim)
+	h := p.MouseHandler()
+	noFocus := func(tview.Primitive) {}
+
+	// No mouse mode: the wheel scrolls history instead of sending input.
+	for i := range 50 {
+		_, _ = p.Output().Write([]byte(itoa(i) + "\r\n"))
+	}
+	p.Draw(sim)
+	h(tview.MouseScrollUp, tcell.NewEventMouse(5, 5, tcell.WheelUp, 0), noFocus)
+	if p.scroll != wheelLines || rec.String() != "" {
+		t.Fatalf("scroll=%d sent=%q", p.scroll, rec.String())
+	}
+	p.scrollToBottom()
+
+	// SGR mouse mode (what htop/vim use).
+	_, _ = p.Output().Write([]byte("\x1b[?1000h\x1b[?1006h"))
+	h(tview.MouseLeftDown, tcell.NewEventMouse(4, 3, tcell.Button1, 0), noFocus)
+	h(tview.MouseLeftUp, tcell.NewEventMouse(4, 3, tcell.ButtonNone, 0), noFocus)
+	h(tview.MouseScrollDown, tcell.NewEventMouse(4, 3, tcell.WheelDown, 0), noFocus)
+	want := "\x1b[<0;4;3M\x1b[<0;4;3m\x1b[<65;4;3M"
+	eventually(t, "mouse bytes", func() bool { return rec.String() == want })
+	if p.scroll != 0 {
+		t.Fatal("wheel scrolled history while the program wanted the mouse")
 	}
 }

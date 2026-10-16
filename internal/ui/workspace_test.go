@@ -97,31 +97,74 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 	default:
 	}
 
-	// Split right with a second local shell.
-	sim.InjectKey(tcell.KeyCtrlB, 0, tcell.ModNone)
-	typeText(sim, "|")
-	waitFor(t, app, sim, "Open in new pane")
+	// Scrollback: the mouse wheel scrolls back to output that went off screen.
+	typeText(sim, "echo TOP-MARK; seq 1 200")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitFor(t, app, sim, "200 ")
+	if strings.Contains(readScreen(app, sim), "TOP-MARK\n") {
+		t.Fatal("TOP-MARK still on screen before scrolling")
+	}
+	x, y := findText(t, app, sim, "200 ")
+	for range 80 {
+		sim.InjectMouse(x, y, tcell.WheelUp, tcell.ModNone)
+	}
+	waitFor(t, app, sim, "lines · scroll down to return")
+	waitFor(t, app, sim, "TOP-MARK ")
+	// Typing jumps back to the bottom.
+	typeText(sim, "clear")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitForGone(t, app, sim, "scroll down to return")
+
+	// Split right by clicking the toolbar button.
+	clickText(t, app, sim, "⇆ Split right")
+	waitFor(t, app, sim, "New session — pick a server")
 	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone) // "Local shell"
 	time.Sleep(300 * time.Millisecond)
 	if n := paneCount(app); n != 2 {
 		t.Fatalf("panes = %d, want 2", n)
 	}
+	waitFor(t, app, sim, "2 local")
 
-	// Ctrl+B 1 types the first saved command (without Enter).
-	sim.InjectKey(tcell.KeyCtrlB, 0, tcell.ModNone)
-	typeText(sim, "1")
+	// Clicking a saved command chip types it (without Enter).
+	clickText(t, app, sim, "1 greet")
 	waitFor(t, app, sim, "$ echo saved-cmd-ran")
 	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
 	waitFor(t, app, sim, "║saved-cmd-ran")
 
-	// Back to the list and in again: sessions are still there.
-	sim.InjectKey(tcell.KeyCtrlB, 0, tcell.ModNone)
-	typeText(sim, "w")
+	// Ctrl+A then a single key: CONTROL mode, 1 types saved command 1.
+	sim.InjectKey(tcell.KeyCtrlA, 0, tcell.ModCtrl)
+	waitFor(t, app, sim, "CONTROL")
+	typeText(sim, "1")
+	waitFor(t, app, sim, "TERMINAL")
+	waitFor(t, app, sim, "$ echo saved-cmd-ran ")
+
+	// Drag over text in the first pane copies it.
+	var copied string
+	copyToClipboard = func(s string) { copied = s }
+	sim.InjectKey(tcell.KeyCtrlU, 0, tcell.ModCtrl) // clear the typed line
+	typeText(sim, "echo drag-me-please")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitFor(t, app, sim, "║drag-me-please")
+	x, y = findText(t, app, sim, "║drag-me-please")
+	x++
+	sim.InjectMouse(x, y, tcell.Button1, tcell.ModNone)
+	sim.InjectMouse(x+6, y, tcell.Button1, tcell.ModNone)
+	sim.InjectMouse(x+13, y, tcell.Button1, tcell.ModNone)
+	sim.InjectMouse(x+13, y, tcell.ButtonNone, tcell.ModNone)
+	waitFor(t, app, sim, "Copied 14 characters")
+	var got string
+	app.app.QueueUpdate(func() { got = copied })
+	if got != "drag-me-please" {
+		t.Fatalf("copied %q", got)
+	}
+
+	// Back to the server list and in again: sessions are still there.
+	clickText(t, app, sim, "☰ Server list")
 	waitFor(t, app, sim, "Servers")
 	typeText(sim, "w")
-	waitFor(t, app, sim, "pane-one-42")
+	waitFor(t, app, sim, "drag-me-please")
 
-	// Exiting a shell then Enter closes its pane.
+	// Exiting a shell, then Enter, closes its pane.
 	typeText(sim, "exit")
 	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
 	waitFor(t, app, sim, "session ended")
@@ -133,4 +176,40 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 
 	app.app.Stop()
 	<-done
+}
+
+func readScreen(a *App, s tcell.SimulationScreen) (text string) {
+	a.app.QueueUpdate(func() { text = screenText(s) })
+	return text
+}
+
+func waitForGone(t *testing.T, a *App, s tcell.SimulationScreen, text string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if !strings.Contains(readScreen(a, s), text) {
+			return
+		}
+	}
+	t.Fatalf("screen still shows %q", text)
+}
+
+// findText returns the screen position of the first occurrence of text.
+func findText(t *testing.T, a *App, s tcell.SimulationScreen, text string) (int, int) {
+	t.Helper()
+	for y, line := range strings.Split(readScreen(a, s), "\n") {
+		if i := strings.Index(line, text); i >= 0 {
+			return len([]rune(line[:i])), y
+		}
+	}
+	t.Fatalf("%q not on screen", text)
+	return 0, 0
+}
+
+func clickText(t *testing.T, a *App, s tcell.SimulationScreen, text string) {
+	t.Helper()
+	x, y := findText(t, a, s, text)
+	s.InjectMouse(x+1, y, tcell.Button1, tcell.ModNone)
+	time.Sleep(20 * time.Millisecond)
+	s.InjectMouse(x+1, y, tcell.ButtonNone, tcell.ModNone)
+	time.Sleep(100 * time.Millisecond)
 }

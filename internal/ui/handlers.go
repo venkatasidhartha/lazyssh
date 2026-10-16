@@ -242,7 +242,8 @@ func (t *App) handleCopyCommand() {
 	t.showStatusTemp("Copied: " + cmd)
 }
 
-func copyToClipboard(text string) {
+// copyToClipboard is a variable so tests can keep the real clipboard alone.
+var copyToClipboard = func(text string) {
 	if err := clipboard.WriteAll(text); err != nil {
 		// No xclip/xsel/wl-copy: ask the terminal to copy via OSC 52.
 		if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {

@@ -46,9 +46,18 @@ type Pane struct {
 	scroll    int // lines scrolled up into the scrollback
 	lastSB    int // scrollback length at the last draw
 	selecting bool
-	selA      [2]int // anchor (x, line)
-	selB      [2]int // current end
-	hasSel    bool
+	fwdHeld   bool // a mouse button pressed in the program is still down
+
+	// Input for the program is queued and written by its own goroutine:
+	// a program that stops reading must not block the UI or the
+	// emulator (whose lock is held while it encodes mouse events).
+	inMu     sync.Mutex
+	inCond   *sync.Cond
+	inQ      [][]byte
+	inClosed bool
+	selA     [2]int // anchor (x, line)
+	selB     [2]int // current end
+	hasSel   bool
 
 	// Terminal modes requested by the program (set from emulator callbacks).
 	appCursor  atomic.Bool
@@ -114,6 +123,8 @@ func NewPane(label string, redraw func()) *Pane {
 	})
 	// Replies (cursor reports), encoded mouse events and pastes come out
 	// of the emulator and go to the program.
+	p.inCond = sync.NewCond(&p.inMu)
+	go p.writeInput()
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -230,18 +241,52 @@ func (p *Pane) Close() {
 	be := p.be
 	p.be = nil
 	p.mu.Unlock()
+	p.inMu.Lock()
+	p.inClosed = true
+	p.inCond.Broadcast()
+	p.inMu.Unlock()
 	if be != nil {
 		_ = be.Close()
 	}
 }
 
-// Send writes raw bytes to the program.
+// Send queues raw bytes for the program.
 func (p *Pane) Send(b []byte) {
-	p.mu.Lock()
-	be := p.be
-	p.mu.Unlock()
-	if be != nil {
-		_, _ = be.Write(b)
+	p.inMu.Lock()
+	defer p.inMu.Unlock()
+	if p.inClosed {
+		return
+	}
+	p.inQ = append(p.inQ, append([]byte(nil), b...))
+	p.inCond.Signal()
+}
+
+// writeInput writes queued input to the program, in order.
+func (p *Pane) writeInput() {
+	for {
+		p.inMu.Lock()
+		for len(p.inQ) == 0 && !p.inClosed {
+			p.inCond.Wait()
+		}
+		if p.inClosed {
+			p.inMu.Unlock()
+			return
+		}
+		q := p.inQ
+		p.inQ = nil
+		p.inMu.Unlock()
+
+		p.mu.Lock()
+		be := p.be
+		p.mu.Unlock()
+		if be == nil {
+			continue
+		}
+		for _, b := range q {
+			if _, err := be.Write(b); err != nil {
+				break
+			}
+		}
 	}
 }
 
@@ -530,7 +575,7 @@ func (p *Pane) PasteHandler() func(string, func(tview.Primitive)) {
 func (p *Pane) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tview.Primitive)) (bool, tview.Primitive) {
 	return p.WrapMouseHandler(func(action tview.MouseAction, ev *tcell.EventMouse, setFocus func(tview.Primitive)) (bool, tview.Primitive) {
 		mx, my := ev.Position()
-		if !p.InRect(mx, my) && !p.selecting {
+		if !p.InRect(mx, my) && !p.selecting && !p.fwdHeld {
 			return false, nil
 		}
 		ix, iy, w, h := p.GetInnerRect()
@@ -543,10 +588,26 @@ func (p *Pane) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tv
 
 		// The program asked for mouse events (htop, vim, mc…): forward
 		// them, unless Shift is held, which selects text like xterm does.
-		if modes := p.mouseModes.Load(); modes != 0 && ev.Modifiers()&tcell.ModShift == 0 && p.scroll == 0 {
+		// Only events inside the program's area are forwarded, and the
+		// mouse is held only while a button pressed there is down, so the
+		// border, title buttons and everything around stay clickable.
+		inside := mx >= ix && mx < ix+w && my >= iy && my < iy+h
+		if modes := p.mouseModes.Load(); modes != 0 && ev.Modifiers()&tcell.ModShift == 0 && p.scroll == 0 && (inside || p.fwdHeld) {
 			if p.sendMouse(action, ev, col, row, modes) {
-				return true, p
+				switch action {
+				case tview.MouseLeftDown, tview.MouseMiddleDown, tview.MouseRightDown:
+					p.fwdHeld = true
+				case tview.MouseLeftUp, tview.MouseMiddleUp, tview.MouseRightUp:
+					p.fwdHeld = false
+				}
+				if p.fwdHeld {
+					return true, p
+				}
+				return true, nil
 			}
+		}
+		if !inside && action == tview.MouseLeftDown {
+			return true, nil // a click on the border is not a selection
 		}
 
 		switch action {

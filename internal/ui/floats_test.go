@@ -152,3 +152,62 @@ func TestWorkspacePopups(t *testing.T) {
 	app.app.Stop()
 	<-done
 }
+
+// A program that tracks every mouse move (htop, vim with mouse=a…) must
+// not keep the mouse: the window's title buttons, move and resize still
+// work after the mouse moved over it.
+func TestPopupControlsWithMouseApp(t *testing.T) {
+	app, sim, done := startApp(t)
+	waitFor(t, app, sim, "$ ")
+	grabMouse := func() {
+		// What htop sends: any-event tracking with SGR coordinates.
+		typeText(sim, `printf '\033[?1003h\033[?1006h'; echo grabbed`)
+		sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	}
+	wiggle := func(x0, y0, x1, y1 int) {
+		for x := x0; x <= x1; x += max(1, (x1-x0)/15) {
+			sim.InjectMouse(x, y0+(x-x0)%(y1-y0+1), tcell.ButtonNone, tcell.ModNone)
+			time.Sleep(15 * time.Millisecond) // the simulated screen drops events past 10 queued
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+
+	// Tiled pane: after moving over it, its ⇆ button still works.
+	grabMouse()
+	waitFor(t, app, sim, "grabbed")
+	var px, py, pw, ph int
+	app.app.QueueUpdate(func() { px, py, pw, ph = app.workspace.focused.pane.GetRect() })
+	wiggle(px+2, py+2, px+pw-3, py+ph-3)
+	clickPaneButton(t, app, sim, "float") // pop it out
+	var n int
+	app.app.QueueUpdate(func() { n = len(app.workspace.floats) })
+	if n != 1 {
+		t.Fatal("pop out did not work while a program tracked the mouse")
+	}
+
+	// Popup: move it, resize it, minimize and close it.
+	rect := func() (x, y, w, h int) {
+		app.app.QueueUpdate(func() { x, y, w, h = app.workspace.layer.rect(app.workspace.floats[0]) })
+		return
+	}
+	x, y, w, h := rect()
+	wiggle(x+2, y+2, x+w-3, y+h-3)
+	drag(sim, x+3, y, x-5, y-2)
+	if x2, y2, _, _ := rect(); x2 != x-8 || y2 != y-2 {
+		t.Fatalf("move: %d,%d -> %d,%d", x, y, x2, y2)
+	}
+	x, y, w, h = rect()
+	wiggle(x+2, y+2, x+w-3, y+h-3)
+	drag(sim, x+w-1, y+h-1, x+w-6, y+h-2)
+	if _, _, w2, h2 := rect(); w2 != w-5 || h2 != h-1 {
+		t.Fatalf("resize: %dx%d -> %dx%d", w, h, w2, h2)
+	}
+	wiggle(x+2, y+2, x+w-8, y+h-3)
+	clickFloatButton(t, app, sim, "fclose")
+	app.app.QueueUpdate(func() { n = len(app.workspace.floats) })
+	if n != 0 {
+		t.Fatal("✕ did not close the popup while a program tracked the mouse")
+	}
+	app.app.Stop()
+	<-done
+}

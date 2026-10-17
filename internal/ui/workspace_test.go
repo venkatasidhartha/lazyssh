@@ -151,11 +151,49 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 	if n := paneCount(app); n != 3 {
 		t.Fatalf("panes = %d, want 3", n)
 	}
-	// ⤢ maximizes it, clicking again shows all, ✕ closes it.
+	// ✎ names it; the name shows in its title and in the session list.
+	clickPaneButton(t, app, sim, "rename")
+	waitFor(t, app, sim, "Rename session")
+	sim.InjectKey(tcell.KeyCtrlU, 0, tcell.ModCtrl)
+	typeText(sim, "app logs")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitFor(t, app, sim, "3 app logs")
+	waitFor(t, app, sim, "╔ app logs ")
+
+	// ⤢ fills the whole terminal; ⤡ goes back to the panes.
 	clickPaneButton(t, app, sim, "zoom")
-	waitFor(t, app, sim, "Panes view")
-	clickPaneButton(t, app, sim, "zoom")
-	waitFor(t, app, sim, "Tabs view")
+	waitFor(t, app, sim, "⤢ app logs")
+	waitForGone(t, app, sim, "Sessions")
+	typeText(sim, "echo zoomed-$((3*3))")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitFor(t, app, sim, "zoomed-9")
+	clickText(t, app, sim, "⤡ Exit full screen")
+	waitFor(t, app, sim, "Sessions")
+	// Double-clicking a title bar does the same.
+	var tx, ty int
+	app.app.QueueUpdate(func() { tx, ty, _, _ = app.workspace.focused.pane.GetRect() })
+	for range 2 {
+		sim.InjectMouse(tx+3, ty, tcell.Button1, tcell.ModNone)
+		time.Sleep(10 * time.Millisecond)
+		sim.InjectMouse(tx+3, ty, tcell.ButtonNone, tcell.ModNone)
+		time.Sleep(10 * time.Millisecond)
+	}
+	waitFor(t, app, sim, "⤡ Exit full screen")
+	clickText(t, app, sim, "⤡ Exit full screen")
+	waitFor(t, app, sim, "Sessions")
+
+	// ⊟ Even sizes undoes the border drag.
+	clickText(t, app, sim, "⊟ Even sizes")
+	var w0, w1 int
+	app.app.QueueUpdate(func() {
+		l := app.workspace.leaves()
+		_, _, w0, _ = l[0].pane.GetRect()
+		_, _, w1, _ = l[1].prim.GetRect()
+	})
+	if d := w0 - w1; d < -1 || d > 1 {
+		t.Fatalf("even sizes: %d vs %d", w0, w1)
+	}
+
 	clickPaneButton(t, app, sim, "close")
 	time.Sleep(200 * time.Millisecond)
 	if n := paneCount(app); n != 2 {

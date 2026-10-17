@@ -69,6 +69,10 @@ type Workspace struct {
 	listRows []listRow
 	empty    *tview.TextView // shown when no session is open
 
+	zoomed   *wsNode // the session shown full screen, if any
+	zoomView *tview.Flex
+	zoomBar  *tview.TextView
+
 	floats     []*floatWin // popup windows, bottom to top
 	floatFocus *floatWin   // the popup being typed into, nil for a tile
 	layer      *floatLayer
@@ -128,6 +132,8 @@ func newWorkspace(t *App) *Workspace {
 	w.panes = newPaneArea(w)
 	w.body = tview.NewFlex()
 	w.status = w.buttonBar()
+	w.zoomBar = w.buttonBar()
+	w.zoomView = tview.NewFlex().SetDirection(tview.FlexRow)
 	w.layer = newFloatLayer(w, w.body)
 	w.view = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(w.actions, 1, 0, false).
@@ -183,9 +189,10 @@ func (w *Workspace) drawActions() {
 		btn("splitv", "⇆ Split right", "#87AFD7") +
 		btn("splith", "⇅ Split down", "#87AFD7") +
 		btn("popup", "❐ Popup", "#D7AFFF") +
+		btn("even", "⊟ Even sizes", "#87AFD7") +
 		btn("layout", layout, "#87AFD7") +
 		btn("close", "✕ Close", "#FF8787") +
-		btn("palette", "⌕ Find", "#D7D7AF") +
+		btn("palette", "⌕ Search", "#D7D7AF") +
 		btn("side", side, "#8A8A8A") +
 		btn("help", "? Help", "#8A8A8A") +
 		btn("servers", "☰ Server list", "#8A8A8A"))
@@ -353,6 +360,10 @@ func (w *Workspace) floatButton(f *floatWin, id string) {
 		w.focusFloat(f)
 	case "fdock":
 		w.dock(f)
+	case "fzoom":
+		w.zoom(f.node)
+	case "frename":
+		w.renameForm(f.node)
 	case "fclose":
 		w.closeFloat(f)
 	}
@@ -502,7 +513,7 @@ func (w *Workspace) styleBorders() {
 
 func (w *Workspace) updateStatus() {
 	if w.mode == modeControl {
-		w.status.SetText(" [black:#FFD75F:b] CONTROL [-:-:-] [white]v[-] split right  [white]s[-] split down  [white]n[-] new  [white]x[-] close  [white]t[-] tabs/panes  [white]←↑↓→[-] move  [white]Space[-] find action  [white]c[-] commands  [white]?[-] help  [white]q[-] server list  [#8a8a8a]Esc = back to typing[-]")
+		w.status.SetText(" [black:#FFD75F:b] CONTROL [-:-:-] [white]v[-] split right  [white]s[-] split down  [white]n[-] new  [white]x[-] close  [white]z[-] full screen  [white]r[-] rename  [white]e[-] even sizes  [white]t[-] tabs/panes  [white]←↑↓→[-] move  [white]Space[-] find action  [white]c[-] commands  [white]?[-] help  [white]q[-] server list  [#8a8a8a]Esc = back to typing[-]")
 		return
 	}
 	n := w.PaneCount() + len(w.floats)
@@ -534,6 +545,11 @@ func plural(n int) string {
 // show puts the workspace on screen.
 func (w *Workspace) show() {
 	w.t.inWorkspace = true
+	if w.zoomed != nil {
+		w.refresh()
+		w.showZoom()
+		return
+	}
 	w.t.app.SetRoot(w.view, true)
 	w.refresh()
 }
@@ -548,6 +564,12 @@ func (w *Workspace) hide() {
 
 // restore puts the workspace back on screen after a picker or form.
 func (w *Workspace) restore() {
+	if w.zoomed != nil && w.isLive(w.zoomed) {
+		w.refresh()
+		w.showZoom()
+		return
+	}
+	w.zoomed = nil
 	w.t.app.SetRoot(w.view, true)
 	w.refresh()
 	if p := w.activePane(); p != nil {
@@ -581,6 +603,7 @@ func (w *Workspace) open(s *domain.Server, dir int) {
 	if s != nil {
 		label, target = s.Alias, s.Target()
 	}
+	label = w.uniqueLabel(label)
 	app := w.t.app
 	p := vterm.NewPane(label, func() { go app.QueueUpdateDraw(func() {}) })
 	p.OnCopy = func(text string) {
@@ -635,8 +658,28 @@ func (w *Workspace) open(s *domain.Server, dir int) {
 	go w.connect(p, *s)
 }
 
+// uniqueLabel numbers repeated names: local, local 2, local 3…
+func (w *Workspace) uniqueLabel(label string) string {
+	used := map[string]bool{}
+	for _, n := range w.leaves() {
+		used[n.pane.Label()] = true
+	}
+	for _, f := range w.floats {
+		used[f.node.pane.Label()] = true
+	}
+	name := label
+	for i := 2; used[name]; i++ {
+		name = fmt.Sprintf("%s %d", label, i)
+	}
+	return name
+}
+
 // closeFocused ends the session being typed into and removes its pane.
 func (w *Workspace) closeFocused() {
+	if w.zoomed != nil {
+		w.zoomed = nil
+		w.t.app.SetRoot(w.view, true)
+	}
 	if f := w.activeFloat(); f != nil {
 		w.closeFloat(f)
 		return
@@ -795,6 +838,12 @@ func (w *Workspace) button(id string) {
 		w.open(nil, -1)
 	case id == "addserver":
 		w.addServer()
+	case id == "unzoom":
+		w.unzoom()
+	case id == "rename":
+		w.renameForm(w.activeNode())
+	case id == "even":
+		w.evenSizes()
 	case id == "popup":
 		w.newSessionPicker(dirFloat)
 	case strings.HasPrefix(id, "float"):
@@ -839,8 +888,9 @@ func (w *Workspace) paneButton(n *wsNode, id string) {
 	case "splith":
 		w.newSessionPicker(tview.FlexRow)
 	case "zoom":
-		w.tabs = !w.tabs
-		w.refresh()
+		w.zoom(n)
+	case "rename":
+		w.renameForm(n)
 	case "float":
 		w.popOut(n)
 	case "close":
@@ -925,9 +975,15 @@ func (w *Workspace) controlKey(ev *tcell.EventKey, p *vterm.Pane) {
 		w.newSessionPicker(-1)
 	case 'x':
 		w.closeFocused()
-	case 't', 'z', 'L':
+	case 't', 'L':
 		w.tabs = !w.tabs
 		w.refresh()
+	case 'z':
+		w.toggleZoom(w.activeNode())
+	case 'r':
+		w.renameForm(w.activeNode())
+	case 'e':
+		w.evenSizes()
 	case 'h':
 		w.moveFocus(-1, 0)
 	case 'l':
@@ -975,7 +1031,7 @@ func (w *Workspace) reloadCommands() {
 	var b strings.Builder
 	b.WriteString(" [#FFD75F::b]★ Commands[-:-:-] ")
 	b.WriteString(btn("save", "+ Save", "#FFD75F"))
-	b.WriteString(btn("cmds", "☰ All", "#D7D7AF"))
+	b.WriteString(btn("cmds", "☰ All commands", "#D7D7AF"))
 	for i, c := range w.commands {
 		num := ""
 		if i < 9 {
@@ -1133,8 +1189,20 @@ func (w *Workspace) actionFinder() {
 	add("Show / hide session list", "", func() { w.sidebar = !w.sidebar; w.restore() })
 	add("Back to server list", "sessions keep running", w.hide)
 	add("Help", "mouse and keyboard cheatsheet", w.showHelp)
+	add("Even sizes", "give every split pane the same space", func() { w.restore(); w.evenSizes() })
 	for _, n := range w.leaves() {
-		add("Go to "+n.pane.Label(), n.target, func() { w.restore(); w.focus(n) })
+		name := n.pane.Label()
+		add("Go to "+name, n.target, func() { w.restore(); w.focus(n) })
+		add("Full screen "+name, "fill the whole terminal with it", func() { w.zoom(n) })
+		add("Rename "+name, "give the session a name you remember", func() { w.renameForm(n) })
+		add("Pop out "+name, "move it into a popup window", func() { w.restore(); w.popOut(n) })
+	}
+	for _, f := range w.floats {
+		name := f.node.pane.Label()
+		add("Go to "+name, "popup · "+f.node.target, func() { w.restore(); w.focusFloat(f) })
+		add("Full screen "+name, "fill the whole terminal with it", func() { w.zoom(f.node) })
+		add("Rename "+name, "give the session a name you remember", func() { w.renameForm(f.node) })
+		add("Dock "+name, "move the popup into the split panes", func() { w.restore(); w.dock(f) })
 	}
 	for _, s := range w.t.store.List() {
 		add("Open "+s.Alias, s.Target(), func() { w.restore(); w.open(&s, -1) })
@@ -1151,32 +1219,34 @@ func (w *Workspace) actionFinder() {
 
 func (w *Workspace) showHelp() {
 	w.mode = modeTerminal
-	text := `[#55D7FF::b]Mouse — works like a normal terminal[-:-:-]
-  Click a session          type into it
-  Wheel                    scroll back through its output
-  Drag                     select text (copied automatically)
-  Double-click             select a word
-  Right-click              paste
-  Shift + drag             select inside mouse apps (htop, vim…)
-  ⇆ ⇅ ⤢ ✕ on a pane        split right / split down / maximize / close it
-  Drag a pane border       resize the panes
-  ❐ Popup                  a session in a window above the panes: drag its
-                           title to move, drag ◢ to resize, ▁ minimize to
-                           the bottom bar, □ maximize, ⊞ dock into the grid
-  Buttons on top           every action, no keys needed
+	text := `[#55D7FF::b]Buttons on each session's title bar[-:-:-]
+  ✎ Rename       give it a name you remember (app logs, db shell…)
+  ⇆ ⇅            split it right / down        ✕  close it
+  ❐ Pop out      move it into a popup window  ⊞  dock a popup back
+  ⤢ Full screen  fill the whole terminal; ⤡ in the top bar goes back
+                 (double-clicking a title bar does the same)
+  Popups also:   ▁ minimize to the bottom bar · □ maximize · drag the
+                 title to move · drag ◢ to resize
 
-[#55D7FF::b]Keyboard (optional) — TERMINAL mode[-:-:-]
-  Every key goes to the highlighted session. Ctrl+C never quits lazyssh.
-  Alt+←↑↓→                 move between sessions
-  Shift+PgUp / PgDn        scroll back
-  Ctrl+A                   switch to CONTROL mode (border turns yellow)
+[#55D7FF::b]Top bars[-:-:-]
+  ⊟ Even sizes   same space for every split pane (drag borders to resize)
+  ⌕ Search       one searchable list of every action, session, server
+                 and saved command
+  ★ Commands     + Save keeps the command you are typing; a chip types
+                 it into the session; ☰ All commands lists, runs, deletes
 
-[#FFD75F::b]Keyboard (optional) — CONTROL mode, for people who prefer keys[-:-:-]
-  v  split right     s  split down     n  new session    x  close
-  t  tabs / panes    ←↑↓→ or hjkl  move     [ ]  previous / next
-  Space  find action    c  commands    a  save command    1-9  type command
-  b  session list    q  server list     ?  help
-  Esc, Enter or i    back to TERMINAL    Ctrl+A again  send a real Ctrl+A
+[#55D7FF::b]Mouse — works like a normal terminal[-:-:-]
+  Click a session to type in it · wheel scrolls back · drag selects and
+  copies · double-click selects a word · right-click pastes ·
+  Shift + drag selects inside mouse apps (htop, vim, nvim…)
+  Text too small/big? Zoom your terminal (Ctrl+Shift+= / Ctrl+-):
+  every pane and program re-fits to the new size.
+
+[#FFD75F::b]Keyboard (optional)[-:-:-]
+  Ctrl+C always goes to the program. Alt+←↑↓→ moves between sessions.
+  Ctrl+A, then: v/s split · n new · x close · z full screen · r rename
+  e even sizes · t tabs view · Space search · c commands · a save
+  1-9 type a command · ←↑↓→ move · Esc back · Ctrl+A again sends Ctrl+A
 
 [#8a8a8a]Esc closes this help[-]`
 	tv := tview.NewTextView().SetDynamicColors(true).SetText(text)
@@ -1189,7 +1259,7 @@ func (w *Workspace) showHelp() {
 		}
 		return a, ev
 	})
-	w.t.app.SetRoot(centered(tv, 82, 34), true).SetFocus(tv)
+	w.t.app.SetRoot(centered(tv, 80, 36), true).SetFocus(tv)
 }
 
 type pickItem struct{ main, secondary, search string }

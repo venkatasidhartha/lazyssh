@@ -37,15 +37,12 @@ func newPaneArea(w *Workspace) *paneArea {
 type paneButton struct{ id, wide, narrow, bg string }
 
 func (a *paneArea) buttons() []paneButton {
-	zoom := paneButton{"zoom", "⤢ Maximize", "⤢", "#87AFD7"}
-	if a.w.tabs {
-		zoom = paneButton{"zoom", "▦ Show all", "▦", "#87AFD7"}
-	}
 	return []paneButton{
+		{"rename", "✎ Rename", "✎", "#D7D7AF"},
 		{"splitv", "⇆ Split right", "⇆", "#87D7AF"},
 		{"splith", "⇅ Split down", "⇅", "#87D7AF"},
 		{"float", "❐ Pop out", "❐", "#D7AFFF"},
-		zoom,
+		{"zoom", "⤢ Full screen", "⤢", "#87AFD7"},
 		{"close", "✕ Close", "✕", "#FF8787"},
 	}
 }
@@ -72,19 +69,32 @@ func (a *paneArea) Draw(screen tcell.Screen) {
 func drawTitleButtons(screen tcell.Screen, n *wsNode, btns []paneButton, pressed string) []paneHit {
 	var hits []paneHit
 	x, y, width, _ := n.pane.GetRect()
-	// Wide labels when they fit next to the title, icons otherwise.
-	wide := 0
-	for _, b := range btns {
-		wide += len([]rune(b.wide)) + 3
+	// Full labels where they fit next to the title; the longest ones
+	// shrink to their icon first.
+	labels := make([]string, len(btns))
+	total := 0
+	for i, b := range btns {
+		labels[i] = " " + b.wide + " "
+		total += len([]rune(labels[i])) + 1
 	}
-	useWide := width >= wide+len([]rune(n.pane.GetTitle()))+4
+	room := width - len([]rune(n.pane.GetTitle())) - 4
+	for total > room {
+		longest := -1
+		for i, b := range btns {
+			if labels[i] != " "+b.narrow+" " && (longest < 0 || len([]rune(labels[i])) > len([]rune(labels[longest]))) {
+				longest = i
+			}
+		}
+		if longest < 0 {
+			break
+		}
+		total -= len([]rune(labels[longest])) - len([]rune(btns[longest].narrow)) - 2
+		labels[longest] = " " + btns[longest].narrow + " "
+	}
 	right := x + width - 2
 	for i := len(btns) - 1; i >= 0; i-- {
 		b := btns[i]
-		label := " " + b.narrow + " "
-		if useWide {
-			label = " " + b.wide + " "
-		}
+		label := labels[i]
 		lw := len([]rune(label))
 		x0 := right - lw + 1
 		if x0 <= x+1 {
@@ -205,6 +215,16 @@ func (a *paneArea) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, fun
 			return true, nil
 		}
 		a.swallow = false
+		// Double-click on a title bar: full screen.
+		if action == tview.MouseLeftDoubleClick {
+			for _, n := range a.w.leaves() {
+				px, py, pw, _ := n.pane.GetRect()
+				if y == py && x >= px && x < px+pw && (!a.w.tabs || n == a.w.focused) {
+					a.w.zoom(n)
+					return true, nil
+				}
+			}
+		}
 		if action == tview.MouseLeftDown {
 			if h := a.hitButton(x, y); h != nil {
 				p := *h

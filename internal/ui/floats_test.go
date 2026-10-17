@@ -127,6 +127,22 @@ func TestWorkspacePopups(t *testing.T) {
 		t.Fatalf("restore: %+v, want %+v", g5, g3)
 	}
 
+	// ✎ renames the popup, ⤢ shows it full screen, ⤡ brings it back.
+	clickFloatButton(t, app, sim, "frename")
+	waitFor(t, app, sim, "Rename session")
+	sim.InjectKey(tcell.KeyCtrlU, 0, tcell.ModCtrl)
+	typeText(sim, "build")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitFor(t, app, sim, "╔ build ")
+	clickFloatButton(t, app, sim, "fzoom")
+	waitFor(t, app, sim, "⤢ build")
+	waitFor(t, app, sim, "in-popup-2")
+	clickText(t, app, sim, "⤡ Exit full screen")
+	waitFor(t, app, sim, "╔ build ")
+	if g := state(); g != g3 {
+		t.Fatalf("after full screen: %+v, want %+v", g, g3)
+	}
+
 	// ⊞ docks it into the tiles; ❐ on a tile pops it back out.
 	clickFloatButton(t, app, sim, "fdock")
 	if g6 := state(); g6.n != 0 || g6.tiles != 2 {

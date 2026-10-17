@@ -58,8 +58,10 @@ func floatButtons(f *floatWin) []paneButton {
 		maxi = paneButton{"fmax", "❐ Restore", "❐", "#87AFD7"}
 	}
 	return []paneButton{
+		{"frename", "✎ Rename", "✎", "#D7D7AF"},
 		{"fmin", "▁ Minimize", "▁", "#D7D7AF"},
 		maxi,
+		{"fzoom", "⤢ Full screen", "⤢", "#87AFD7"},
 		{"fdock", "⊞ Dock", "⊞", "#87D7AF"},
 		{"fclose", "✕ Close", "✕", "#FF8787"},
 	}
@@ -218,7 +220,7 @@ func (l *floatLayer) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, f
 			}
 		}
 		if action == tview.MouseLeftDoubleClick && y == fy {
-			l.ws.floatButton(f, "fmax")
+			l.ws.zoom(f.node)
 			return true, nil
 		}
 		if h := f.node.pane.MouseHandler(); h != nil {

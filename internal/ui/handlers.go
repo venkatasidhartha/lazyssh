@@ -96,7 +96,7 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 // empty workspace) the selected server is opened in a new pane.
 func (t *App) handleOpenWorkspace(newPane bool) {
 	ws := t.workspace
-	if ws.PaneCount() > 0 && !newPane {
+	if ws.PaneCount()+len(ws.floats) > 0 && !newPane {
 		ws.show()
 		return
 	}
@@ -111,7 +111,7 @@ func (t *App) handleOpenWorkspace(newPane bool) {
 
 // handleQuit asks before ending running workspace sessions.
 func (t *App) handleQuit() {
-	n := t.workspace.PaneCount()
+	n := t.workspace.PaneCount() + len(t.workspace.floats)
 	if n == 0 {
 		t.app.Stop()
 		return
@@ -132,6 +132,9 @@ func (t *App) handleQuit() {
 func (t *App) closeAllPanes() {
 	for _, n := range t.workspace.leaves() {
 		n.pane.Close()
+	}
+	for _, f := range t.workspace.floats {
+		f.node.pane.Close()
 	}
 }
 

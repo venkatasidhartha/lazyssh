@@ -44,6 +44,7 @@ func (a *paneArea) buttons() []paneButton {
 	return []paneButton{
 		{"splitv", "⇆ Split right", "⇆", "#87D7AF"},
 		{"splith", "⇅ Split down", "⇅", "#87D7AF"},
+		{"float", "❐ Pop out", "❐", "#D7AFFF"},
 		zoom,
 		{"close", "✕ Close", "✕", "#FF8787"},
 	}
@@ -58,36 +59,48 @@ func (a *paneArea) Draw(screen tcell.Screen) {
 	}
 	btns := a.buttons()
 	for _, n := range leaves {
-		x, y, width, _ := n.pane.GetRect()
-		// Wide labels when they fit next to the title, icons otherwise.
-		wide := 0
-		for _, b := range btns {
-			wide += len([]rune(b.wide)) + 3
+		pressed := ""
+		if a.pressed != nil && a.pressed.node == n {
+			pressed = a.pressed.id
 		}
-		useWide := width >= wide+len(n.pane.GetTitle())+4
-		right := x + width - 2
-		for i := len(btns) - 1; i >= 0; i-- {
-			b := btns[i]
-			label := " " + b.narrow + " "
-			if useWide {
-				label = " " + b.wide + " "
-			}
-			lw := len([]rune(label))
-			x0 := right - lw + 1
-			if x0 <= x+1 {
-				break
-			}
-			style := tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(tcell.GetColor(b.bg))
-			if a.pressed != nil && a.pressed.id == b.id && a.pressed.node == n {
-				style = style.Background(tcell.ColorWhite)
-			}
-			for i, r := range []rune(label) {
-				screen.SetContent(x0+i, y, r, nil, style)
-			}
-			a.hits = append(a.hits, paneHit{x0, right, y, b.id, n})
-			right = x0 - 2
-		}
+		a.hits = append(a.hits, drawTitleButtons(screen, n, btns, pressed)...)
 	}
+}
+
+// drawTitleButtons draws btns right-aligned on the top border of n's pane
+// and returns where they are.
+func drawTitleButtons(screen tcell.Screen, n *wsNode, btns []paneButton, pressed string) []paneHit {
+	var hits []paneHit
+	x, y, width, _ := n.pane.GetRect()
+	// Wide labels when they fit next to the title, icons otherwise.
+	wide := 0
+	for _, b := range btns {
+		wide += len([]rune(b.wide)) + 3
+	}
+	useWide := width >= wide+len([]rune(n.pane.GetTitle()))+4
+	right := x + width - 2
+	for i := len(btns) - 1; i >= 0; i-- {
+		b := btns[i]
+		label := " " + b.narrow + " "
+		if useWide {
+			label = " " + b.wide + " "
+		}
+		lw := len([]rune(label))
+		x0 := right - lw + 1
+		if x0 <= x+1 {
+			break
+		}
+		style := tcell.StyleDefault.Foreground(tcell.ColorBlack).Background(tcell.GetColor(b.bg))
+		if pressed == b.id {
+			style = style.Background(tcell.ColorWhite)
+		}
+		for i, r := range []rune(label) {
+			screen.SetContent(x0+i, y, r, nil, style)
+		}
+		hits = append(hits, paneHit{x0, right, y, b.id, n})
+		right = x0 - 2
+	}
+	return hits
 }
 
 func (a *paneArea) hitButton(x, y int) *paneHit {

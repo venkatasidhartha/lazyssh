@@ -63,7 +63,14 @@ type Workspace struct {
 	status   *tview.TextView
 	commands []store.Command
 	syncing  bool // list is being refilled; ignore its change events
+
+	floats     []*floatWin // popup windows, bottom to top
+	floatFocus *floatWin   // the popup being typed into, nil for a tile
+	layer      *floatLayer
 }
+
+// dirFloat as an open direction means "in a popup window".
+const dirFloat = -2
 
 func newWorkspace(t *App) *Workspace {
 	w := &Workspace{t: t, sidebar: true}
@@ -80,12 +87,12 @@ func newWorkspace(t *App) *Workspace {
 	w.list.SetSelectedFunc(func(i int, _, _ string, _ rune) { w.listPick(i) })
 	w.panes = newPaneArea(w)
 	w.body = tview.NewFlex()
-	w.status = tview.NewTextView().SetDynamicColors(true)
-	w.status.SetBackgroundColor(tcell.Color235)
+	w.status = w.buttonBar()
+	w.layer = newFloatLayer(w, w.body)
 	w.view = tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(w.actions, 1, 0, false).
 		AddItem(w.cmdBar, 1, 0, false).
-		AddItem(w.body, 0, 1, true).
+		AddItem(w.layer, 0, 1, true).
 		AddItem(w.status, 1, 0, false)
 	w.reloadCommands()
 	w.refresh()
@@ -132,12 +139,13 @@ func (w *Workspace) drawActions() {
 		side = "◧ Show list"
 	}
 	w.actions.SetText(" " +
-		btn("new", "+ New session", "#55D7FF") +
+		btn("new", "+ New", "#55D7FF") +
 		btn("splitv", "⇆ Split right", "#87AFD7") +
 		btn("splith", "⇅ Split down", "#87AFD7") +
+		btn("popup", "❐ Popup", "#D7AFFF") +
 		btn("layout", layout, "#87AFD7") +
 		btn("close", "✕ Close", "#FF8787") +
-		btn("palette", "⌕ Find action", "#D7D7AF") +
+		btn("palette", "⌕ Find", "#D7D7AF") +
 		btn("side", side, "#8A8A8A") +
 		btn("help", "? Help", "#8A8A8A") +
 		btn("servers", "☰ Server list", "#8A8A8A"))
@@ -243,9 +251,130 @@ func (w *Workspace) refresh() {
 	w.drawActions()
 	w.styleBorders()
 	w.updateStatus()
-	if w.t.inWorkspace && w.focused != nil && w.t.app.GetFocus() != w.focused.pane {
-		w.t.app.SetFocus(w.focused.pane)
+	if p := w.activePane(); w.t.inWorkspace && p != nil && w.t.app.GetFocus() != p {
+		w.t.app.SetFocus(p)
 	}
+}
+
+// activeFloat is the popup being typed into, if any.
+func (w *Workspace) activeFloat() *floatWin {
+	if f := w.floatFocus; f != nil && !f.minimized && w.floatOf(f.node) != nil {
+		return f
+	}
+	return nil
+}
+
+// activePane is the session keys and saved commands go to.
+func (w *Workspace) activePane() *vterm.Pane {
+	if f := w.activeFloat(); f != nil {
+		return f.node.pane
+	}
+	if w.focused != nil {
+		return w.focused.pane
+	}
+	return nil
+}
+
+func (w *Workspace) floatOf(n *wsNode) *floatWin {
+	for _, f := range w.floats {
+		if f.node == n {
+			return f
+		}
+	}
+	return nil
+}
+
+// focusFloat raises f, restores it if minimized and types into it.
+func (w *Workspace) focusFloat(f *floatWin) {
+	for i, g := range w.floats {
+		if g == f {
+			w.floats = append(append(w.floats[:i:i], w.floats[i+1:]...), f)
+			break
+		}
+	}
+	f.minimized = false
+	w.floatFocus = f
+	w.mode = modeTerminal
+	w.refresh()
+	w.t.app.SetFocus(f.node.pane)
+}
+
+func (w *Workspace) floatButton(f *floatWin, id string) {
+	switch id {
+	case "fmin":
+		f.minimized = true
+		w.floatFocus = nil
+		w.refresh()
+		w.flash("Minimized "+f.node.pane.Label()+" — click it in the bottom bar to bring it back", "#D7D7AF")
+	case "fmax":
+		f.maximized = !f.maximized
+		w.focusFloat(f)
+	case "fdock":
+		w.dock(f)
+	case "fclose":
+		w.closeFloat(f)
+	}
+}
+
+func (w *Workspace) removeFloat(f *floatWin) {
+	for i, g := range w.floats {
+		if g == f {
+			w.floats = append(w.floats[:i], w.floats[i+1:]...)
+			break
+		}
+	}
+	if w.floatFocus == f {
+		w.floatFocus = nil
+		// Type into the popup below it, if one is showing.
+		for i := len(w.floats) - 1; i >= 0; i-- {
+			if !w.floats[i].minimized {
+				w.floatFocus = w.floats[i]
+				break
+			}
+		}
+	}
+}
+
+func (w *Workspace) closeFloat(f *floatWin) {
+	f.node.pane.Close()
+	w.removeFloat(f)
+	w.mode = modeTerminal
+	if w.root == nil && len(w.floats) == 0 {
+		w.refresh()
+		w.hide()
+		return
+	}
+	w.refresh()
+}
+
+// dock moves a popup into the tiled layout.
+func (w *Workspace) dock(f *floatWin) {
+	w.removeFloat(f)
+	w.floatFocus = nil
+	n := f.node
+	n.parent, n.kids = nil, nil
+	w.insert(n, w.autoDir())
+	w.focus(n)
+}
+
+// popOut moves a tiled session into a popup window.
+func (w *Workspace) popOut(n *wsNode) {
+	w.detach(n)
+	n.parent = nil
+	w.addFloat(n)
+}
+
+// addFloat shows n in a new popup, cascaded over the existing ones.
+func (w *Workspace) addFloat(n *wsNode) {
+	_, _, lw, lh := w.layer.GetRect()
+	if lw <= 0 || lh <= 0 {
+		lw, lh = 120, 30
+	}
+	fw, fh := max(minFloatW, lw*3/5), max(minFloatH, lh*3/5)
+	k := len(w.floats) % 5
+	f := &floatWin{node: n, w: fw, h: fh, x: (lw-fw)/2 + 3*k, y: (lh-fh)/2 + k}
+	w.floats = append(w.floats, f)
+	w.focusFloat(f)
 }
 
 func (w *Workspace) fillList() {
@@ -263,30 +392,56 @@ func (w *Workspace) fillList() {
 			cur = i
 		}
 	}
+	for i, f := range w.floats {
+		dot := "[#D7AFFF]❐[-]"
+		if f.node.pane.IsExited() {
+			dot = "[#6C6C6C]○[-]"
+		}
+		sec := "    popup · " + tview.Escape(f.node.target)
+		if f.minimized {
+			sec = "    minimized · " + tview.Escape(f.node.target)
+		}
+		w.list.AddItem(fmt.Sprintf("%s %s", dot, tview.Escape(f.node.pane.Label())), sec, 0, nil)
+		if f == w.activeFloat() {
+			cur = w.PaneCount() + i
+		}
+	}
 	w.list.AddItem("[#55D7FF]+ New session[-]", "", 0, nil)
 	w.list.SetCurrentItem(cur)
 }
 
 func (w *Workspace) listPick(i int) {
 	leaves := w.leaves()
-	if i >= len(leaves) {
+	switch {
+	case i < len(leaves):
+		w.focus(leaves[i])
+	case i < len(leaves)+len(w.floats):
+		w.focusFloat(w.floats[i-len(leaves)])
+	default:
 		w.newSessionPicker(-1)
-		return
 	}
-	w.focus(leaves[i])
 }
 
 func (w *Workspace) focus(n *wsNode) {
 	w.focused = n
+	w.floatFocus = nil
 	w.mode = modeTerminal
 	w.refresh()
 	w.t.app.SetFocus(n.pane)
 }
 
 func (w *Workspace) styleBorders() {
+	active := w.activeFloat()
+	for _, f := range w.floats {
+		if f == active {
+			f.node.pane.SetBorderColor(tcell.Color81).SetTitleColor(tcell.Color255)
+		} else {
+			f.node.pane.SetBorderColor(tcell.Color243).SetTitleColor(tcell.Color250)
+		}
+	}
 	for _, n := range w.leaves() {
 		switch {
-		case n != w.focused:
+		case n != w.focused || active != nil:
 			n.pane.SetBorderColor(tcell.Color238).SetTitleColor(tcell.Color245)
 		case w.mode == modeControl:
 			n.pane.SetBorderColor(tcell.Color221).SetTitleColor(tcell.Color221)
@@ -301,8 +456,23 @@ func (w *Workspace) updateStatus() {
 		w.status.SetText(" [black:#FFD75F:b] CONTROL [-:-:-] [white]v[-] split right  [white]s[-] split down  [white]n[-] new  [white]x[-] close  [white]t[-] tabs/panes  [white]←↑↓→[-] move  [white]Space[-] find action  [white]c[-] commands  [white]?[-] help  [white]q[-] server list  [#8a8a8a]Esc = back to typing[-]")
 		return
 	}
-	n := w.PaneCount()
-	w.status.SetText(fmt.Sprintf(" [#8a8a8a]%d session%s · click a pane to type in it · [white]⇆ ⇅[-] on a pane splits it · drag a border to resize · wheel scrolls · drag copies · right-click pastes[-]", n, plural(n)))
+	n := w.PaneCount() + len(w.floats)
+	hint := "click a pane to type in it · [white]⇆ ⇅[-] on a pane splits it · [white]❐[-] pops it out · drag a border to resize · wheel scrolls · drag copies · right-click pastes"
+	if len(w.floats) > 0 {
+		hint = "popups: drag the title to move · drag [white]◢[-] to resize · [white]▁[-] minimize · [white]□[-] maximize · [white]⊞[-] dock into the grid"
+	}
+	w.status.SetText(fmt.Sprintf(" %s[#8a8a8a]%d session%s · %s[-]", w.dockButtons(), n, plural(n), hint))
+}
+
+// dockButtons are the minimized popups, shown as buttons in the bottom bar.
+func (w *Workspace) dockButtons() string {
+	var b strings.Builder
+	for i, f := range w.floats {
+		if f.minimized {
+			b.WriteString(btn(fmt.Sprintf("float%d", i), "❐ "+tview.Escape(f.node.pane.Label()), "#D7AFFF"))
+		}
+	}
+	return b.String()
 }
 
 func plural(n int) string {
@@ -331,8 +501,8 @@ func (w *Workspace) hide() {
 func (w *Workspace) restore() {
 	w.t.app.SetRoot(w.view, true)
 	w.refresh()
-	if w.focused != nil {
-		w.t.app.SetFocus(w.focused.pane)
+	if p := w.activePane(); p != nil {
+		w.t.app.SetFocus(p)
 	}
 }
 
@@ -355,7 +525,7 @@ func (w *Workspace) autoDir() int {
 // open starts a session next to the focused one (or as the first one).
 // s == nil opens a local shell. dir < 0 picks a direction automatically.
 func (w *Workspace) open(s *domain.Server, dir int) {
-	if dir < 0 {
+	if dir < 0 && dir != dirFloat {
 		dir = w.autoDir()
 	}
 	label, target := "local", "this machine"
@@ -376,20 +546,31 @@ func (w *Workspace) open(s *domain.Server, dir int) {
 	p.SetFocusFunc(func() {
 		// A click on a pane (or any focus change) means "type here".
 		for _, n := range w.leaves() {
-			if n.pane == p && w.focused != n {
+			if n.pane == p && (w.focused != n || w.floatFocus != nil) {
 				w.focused = n
+				w.floatFocus = nil
 				w.mode = modeTerminal
 				w.fillList()
 				w.styleBorders()
 				w.updateStatus()
 			}
 		}
+		for _, f := range w.floats {
+			if f.node.pane == p && w.floatFocus != f {
+				w.focusFloat(f)
+			}
+		}
 	})
 	p.SetTitleAlign(tview.AlignLeft)
 	leaf := &wsNode{pane: p, target: target, server: s}
-	w.insert(leaf, dir)
 	w.mode = modeTerminal
-	w.refresh()
+	if dir == dirFloat {
+		w.addFloat(leaf)
+	} else {
+		w.floatFocus = nil
+		w.insert(leaf, dir)
+		w.refresh()
+	}
 
 	if s == nil {
 		shell := os.Getenv("SHELL")
@@ -405,13 +586,29 @@ func (w *Workspace) open(s *domain.Server, dir int) {
 	go w.connect(p, *s)
 }
 
-// closeFocused ends the focused session and removes its pane.
+// closeFocused ends the session being typed into and removes its pane.
 func (w *Workspace) closeFocused() {
+	if f := w.activeFloat(); f != nil {
+		w.closeFloat(f)
+		return
+	}
 	n := w.focused
 	if n == nil {
 		return
 	}
 	n.pane.Close()
+	w.detach(n)
+	w.mode = modeTerminal
+	if w.root == nil && len(w.floats) == 0 {
+		w.refresh()
+		w.hide()
+		return
+	}
+	w.refresh()
+}
+
+// detach takes n out of the tiled layout and focuses a neighbour.
+func (w *Workspace) detach(n *wsNode) {
 	leaves := w.leaves()
 	var next *wsNode
 	if i := indexOf(leaves, n); len(leaves) > 1 {
@@ -431,14 +628,9 @@ func (w *Workspace) closeFocused() {
 			w.replace(par, par.kids[0])
 		}
 	}
-	w.focused = next
-	w.mode = modeTerminal
-	if w.root == nil {
-		w.refresh()
-		w.hide()
-		return
+	if w.focused == n {
+		w.focused = next
 	}
-	w.refresh()
 }
 
 // moveFocus focuses the nearest pane in direction (dx, dy); in tabs view
@@ -471,6 +663,7 @@ func (w *Workspace) moveFocus(dx, dy int) {
 	}
 	if best != nil {
 		w.focused = best
+		w.floatFocus = nil
 		w.refresh()
 	}
 }
@@ -482,6 +675,7 @@ func (w *Workspace) cycleFocus(step int) {
 	}
 	i := indexOf(leaves, w.focused)
 	w.focused = leaves[((i+step)%len(leaves)+len(leaves))%len(leaves)]
+	w.floatFocus = nil
 	w.refresh()
 }
 
@@ -550,6 +744,12 @@ func (w *Workspace) button(id string) {
 		w.newSessionPicker(tview.FlexColumn)
 	case id == "splith":
 		w.newSessionPicker(tview.FlexRow)
+	case id == "popup":
+		w.newSessionPicker(dirFloat)
+	case strings.HasPrefix(id, "float"):
+		if i, err := strconv.Atoi(strings.TrimPrefix(id, "float")); err == nil && i < len(w.floats) {
+			w.focusFloat(w.floats[i])
+		}
 	case id == "layout":
 		w.tabs = !w.tabs
 		w.refresh()
@@ -590,6 +790,8 @@ func (w *Workspace) paneButton(n *wsNode, id string) {
 	case "zoom":
 		w.tabs = !w.tabs
 		w.refresh()
+	case "float":
+		w.popOut(n)
 	case "close":
 		w.closeFocused()
 	}
@@ -745,10 +947,9 @@ func truncate(s string, n int) string {
 func (w *Workspace) runCommand(c store.Command) {
 	w.mode = modeTerminal
 	w.restore()
-	if w.focused == nil {
-		return
+	if p := w.activePane(); p != nil {
+		p.Type(c.Cmd)
 	}
-	w.focused.pane.Type(c.Cmd)
 	go func() { _ = w.t.store.TouchCommand(c.ID) }()
 }
 
@@ -765,8 +966,8 @@ func promptGuess(line string) string {
 func (w *Workspace) saveCommandForm() {
 	w.mode = modeTerminal
 	guess := ""
-	if w.focused != nil {
-		guess = promptGuess(w.focused.pane.CursorLine())
+	if p := w.activePane(); p != nil {
+		guess = promptGuess(p.CursorLine())
 	}
 	form := tview.NewForm()
 	form.SetBorder(true).SetTitle(" Save command ").SetTitleAlign(tview.AlignCenter)
@@ -791,7 +992,7 @@ func (w *Workspace) saveCommandForm() {
 
 // flash shows msg in the status line for a few seconds.
 func (w *Workspace) flash(msg, color string) {
-	w.status.SetText(" [" + color + "]" + tview.Escape(msg) + "[-]")
+	w.status.SetText(" " + w.dockButtons() + "[" + color + "]" + tview.Escape(msg) + "[-]")
 	time.AfterFunc(2*time.Second, func() { w.t.app.QueueUpdateDraw(w.updateStatus) })
 }
 
@@ -846,6 +1047,8 @@ func (w *Workspace) newSessionPicker(dir int) {
 		title = " Split right — pick a server "
 	case tview.FlexRow:
 		title = " Split down — pick a server "
+	case dirFloat:
+		title = " Popup window — pick a server "
 	}
 	w.showPicker(title, items, func(i int) {
 		w.restore()
@@ -868,6 +1071,7 @@ func (w *Workspace) actionFinder() {
 	add("New session", "pick a server, opens next to the current one", func() { w.newSessionPicker(-1) })
 	add("Split right", "open a server side by side", func() { w.newSessionPicker(tview.FlexColumn) })
 	add("Split down", "open a server below", func() { w.newSessionPicker(tview.FlexRow) })
+	add("Popup window", "open a server in a window above the panes", func() { w.newSessionPicker(dirFloat) })
 	add("Switch tabs / panes view", "one session full screen, or all tiled", func() { w.tabs = !w.tabs; w.restore() })
 	add("Close session", "end the highlighted session", func() { w.restore(); w.closeFocused() })
 	add("Save command", "keep the command being typed in the bar", w.saveCommandForm)
@@ -901,6 +1105,9 @@ func (w *Workspace) showHelp() {
   Shift + drag             select inside mouse apps (htop, vim…)
   ⇆ ⇅ ⤢ ✕ on a pane        split right / split down / maximize / close it
   Drag a pane border       resize the panes
+  ❐ Popup                  a session in a window above the panes: drag its
+                           title to move, drag ◢ to resize, ▁ minimize to
+                           the bottom bar, □ maximize, ⊞ dock into the grid
   Buttons on top           every action, no keys needed
 
 [#55D7FF::b]Keyboard (optional) — TERMINAL mode[-:-:-]
@@ -927,7 +1134,7 @@ func (w *Workspace) showHelp() {
 		}
 		return a, ev
 	})
-	w.t.app.SetRoot(centered(tv, 82, 30), true).SetFocus(tv)
+	w.t.app.SetRoot(centered(tv, 82, 34), true).SetFocus(tv)
 }
 
 type pickItem struct{ main, secondary, search string }

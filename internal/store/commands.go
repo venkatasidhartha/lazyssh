@@ -117,6 +117,23 @@ func (s *Store) DeleteCommand(id string) error {
 	})
 }
 
+// UpdateCommand changes a saved command's name and text.
+func (s *Store) UpdateCommand(id, name, cmd string) error {
+	name, cmd = strings.TrimSpace(name), strings.TrimSpace(cmd)
+	if cmd == "" {
+		return errors.New("command is empty")
+	}
+	return s.mutateCommands(func(cmds []Command) ([]Command, error) {
+		for i := range cmds {
+			if cmds[i].ID == id {
+				cmds[i].Name, cmds[i].Cmd = name, cmd
+				return cmds, nil
+			}
+		}
+		return nil, errors.New("command no longer exists")
+	})
+}
+
 // TouchCommand records that a command was used.
 func (s *Store) TouchCommand(id string) error {
 	return s.mutateCommands(func(cmds []Command) ([]Command, error) {

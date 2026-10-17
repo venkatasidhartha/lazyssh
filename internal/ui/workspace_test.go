@@ -386,3 +386,18 @@ func TestTerminalButtonWithServers(t *testing.T) {
 	app.app.Stop()
 	<-done
 }
+
+func TestPromptGuess(t *testing.T) {
+	for line, want := range map[string]string{
+		"$":                           "",
+		"user@web:~$":                 "",
+		"user@web:~$ tail -f app.log": "tail -f app.log",
+		"root@db:/# systemctl status": "systemctl status",
+		"❯ make test":                 "make test",
+		"":                            "",
+	} {
+		if got := promptGuess(line); got != want {
+			t.Errorf("promptGuess(%q) = %q, want %q", line, got, want)
+		}
+	}
+}

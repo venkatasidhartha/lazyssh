@@ -530,6 +530,16 @@ func (p *Pane) selectWord(x, line int) {
 	p.selA, p.selB, p.hasSel = [2]int{from, line}, [2]int{to, line}, true
 }
 
+// CopySelection copies the selected text (via OnCopy); false when nothing
+// is selected.
+func (p *Pane) CopySelection() bool {
+	if !p.hasSel {
+		return false
+	}
+	p.copySelection()
+	return true
+}
+
 func (p *Pane) copySelection() {
 	if !p.hasSel || p.OnCopy == nil {
 		return

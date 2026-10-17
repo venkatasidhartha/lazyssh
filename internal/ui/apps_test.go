@@ -45,20 +45,22 @@ func TestFullScreenApps(t *testing.T) {
 		input     []key  // typed while it runs
 		after     string // shown after the input
 		quit      []key
+		big       bool // needs at least 80x24 inside the window
 	}{
-		{"htop", "htop", "F1Help", text("/"), "Search:", cat([]key{esc}, text("q"))},
-		{"top", "top", "load average", text("h"), "Toggle:", text("qq")},
-		{"less", `printf 'LESS-%s\n' $(seq 300) | less`, "LESS-1 ", text("G"), "LESS-300", text("q")},
-		{"more", `printf 'MORE-%s\n' $(seq 300) | more`, "--More--", text(" "), "MORE-25", text("q")},
-		{"man", "man 1 sh", "NAME", text("/DESCRIPTION\n"), "Manual page sh(1)", text("q")},
-		{"vi", "vi -u NONE -n " + tmp + "/vi.txt", "~", cat(text("ihello from vi"), []key{esc}), "hello from vi", text(":wq\n")},
-		{"nvim", "nvim --clean -n " + tmp + "/nvim.txt", "~", cat(text("ihello from nvim"), []key{esc}), "hello from nvim", text(":wq\n")},
-		{"nano", "nano " + tmp + "/nano.txt", "^X Exit", text("hello from nano"), "hello from nano", cat([]key{ctrlX}, text("y"), []key{enter})},
-		{"watch", "watch -n1 echo WATCHED", "Every 1.0s", nil, "WATCHED", []key{ctrlC}},
-		{"screen", "screen -q", "", text("echo INSIDE-$((6*7))\n"), "INSIDE-42", text("exit\n")},
-		{"python3", "python3 -q", ">>> ", text("print(6*7)\n"), "42", text("exit()\n")},
-		{"nmtui", "nmtui", "NetworkManager", nil, "Quit", []key{esc}},
-		{"alsamixer", "alsamixer", "AlsaMixer", nil, "Esc: Exit", []key{esc}},
+		{"htop", "htop", "F1Help", text("/"), "Search:", cat([]key{esc}, text("q")), false},
+		{"btop", "btop", "proc", []key{esc}, "██████╗", cat([]key{esc}, text("q")), true},
+		{"top", "top", "load average", text("h"), "Toggle:", text("qq"), false},
+		{"less", `printf 'LESS-%s\n' $(seq 300) | less`, "LESS-1 ", text("G"), "LESS-300", text("q"), false},
+		{"more", `printf 'MORE-%s\n' $(seq 300) | more`, "--More--", text(" "), "MORE-25", text("q"), false},
+		{"man", "man 1 sh", "NAME", text("/DESCRIPTION\n"), "Manual page sh(1)", text("q"), false},
+		{"vi", "vi -u NONE -n " + tmp + "/vi.txt", "~", cat(text("ihello from vi"), []key{esc}), "hello from vi", text(":wq\n"), false},
+		{"nvim", "nvim --clean -n " + tmp + "/nvim.txt", "~", cat(text("ihello from nvim"), []key{esc}), "hello from nvim", text(":wq\n"), false},
+		{"nano", "nano " + tmp + "/nano.txt", "^X Exit", text("hello from nano"), "hello from nano", cat([]key{ctrlX}, text("y"), []key{enter}), false},
+		{"watch", "watch -n1 echo WATCHED", "Every 1.0s", nil, "WATCHED", []key{ctrlC}, false},
+		{"screen", "screen -q", "", text("echo INSIDE-$((6*7))\n"), "INSIDE-42", text("exit\n"), false},
+		{"python3", "python3 -q", ">>> ", text("print(6*7)\n"), "42", text("exit()\n"), false},
+		{"nmtui", "nmtui", "NetworkManager", nil, "Quit", []key{esc}, false},
+		{"alsamixer", "alsamixer", "AlsaMixer", nil, "Esc: Exit", []key{esc}, false},
 	}
 
 	app, sim, done := startApp(t)
@@ -98,6 +100,11 @@ func TestFullScreenApps(t *testing.T) {
 			first := strings.Fields(a.cmd)[0]
 			if _, err := exec.LookPath(first); err != nil {
 				t.Skip(first + " not installed")
+			}
+			W, H := 140, 40
+			if a.big {
+				W, H = 190, 60 // the popup gets 3/5 of it
+				resize(W, H)
 			}
 			// A fresh popup for every program.
 			clickText(t, app, sim, "❐ Popup")
@@ -152,8 +159,8 @@ func TestFullScreenApps(t *testing.T) {
 
 			// The terminal gets smaller and bigger again (font zoom does
 			// this): the program must redraw at the new size.
-			resize(110, 32)
-			resize(140, 40)
+			resize(W-30, H-8)
+			resize(W, H)
 			time.Sleep(500 * time.Millisecond)
 			if a.after != "" && !shows(a.after, 3*time.Second) && !shows(a.ready, time.Second) {
 				t.Errorf("lost its screen after a resize:\n%s", readScreen(app, sim))

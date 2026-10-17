@@ -99,7 +99,7 @@ func (w *Workspace) renameForm(n *wsNode) {
 	box := tview.NewFlex().SetDirection(tview.FlexRow).
 		AddItem(input, 1, 0, true).AddItem(hint, 1, 0, false)
 	box.SetBorder(true).SetTitle(" Rename session ")
-	w.t.app.SetRoot(centered(box, 60, 4), true).SetFocus(input)
+	w.overlay(box, 60, 4, input)
 }
 
 // evenSizes gives every split pane the same share again.

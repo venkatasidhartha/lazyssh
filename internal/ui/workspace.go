@@ -73,6 +73,8 @@ type Workspace struct {
 	zoomView *tview.Flex
 	zoomBar  *tview.TextView
 
+	dialogButton func(id string) // buttons of the open dialog (ids m…)
+
 	floats     []*floatWin // popup windows, bottom to top
 	floatFocus *floatWin   // the popup being typed into, nil for a tile
 	layer      *floatLayer
@@ -192,7 +194,6 @@ func (w *Workspace) drawActions() {
 		btn("even", "⊟ Even sizes", "#87AFD7") +
 		btn("layout", layout, "#87AFD7") +
 		btn("close", "✕ Close", "#FF8787") +
-		btn("palette", "⌕ Search", "#D7D7AF") +
 		btn("side", side, "#8A8A8A") +
 		btn("help", "? Help", "#8A8A8A") +
 		btn("servers", "☰ Server list", "#8A8A8A"))
@@ -513,7 +514,7 @@ func (w *Workspace) styleBorders() {
 
 func (w *Workspace) updateStatus() {
 	if w.mode == modeControl {
-		w.status.SetText(" [black:#FFD75F:b] CONTROL [-:-:-] [white]v[-] split right  [white]s[-] split down  [white]n[-] new  [white]x[-] close  [white]z[-] full screen  [white]r[-] rename  [white]e[-] even sizes  [white]t[-] tabs/panes  [white]←↑↓→[-] move  [white]Space[-] find action  [white]c[-] commands  [white]?[-] help  [white]q[-] server list  [#8a8a8a]Esc = back to typing[-]")
+		w.status.SetText(" [black:#FFD75F:b] CONTROL [-:-:-] [white]v[-] split right  [white]s[-] split down  [white]n[-] new  [white]x[-] close  [white]z[-] full screen  [white]r[-] rename  [white]e[-] even sizes  [white]t[-] tabs/panes  [white]←↑↓→[-] move  [white]c[-] commands  [white]?[-] help  [white]q[-] server list  [#8a8a8a]Esc = back to typing[-]")
 		return
 	}
 	n := w.PaneCount() + len(w.floats)
@@ -838,6 +839,8 @@ func (w *Workspace) button(id string) {
 		w.open(nil, -1)
 	case id == "addserver":
 		w.addServer()
+	case strings.HasPrefix(id, "m") && w.dialogButton != nil:
+		w.dialogButton(id)
 	case id == "unzoom":
 		w.unzoom()
 	case id == "rename":
@@ -855,8 +858,6 @@ func (w *Workspace) button(id string) {
 		w.refresh()
 	case id == "close":
 		w.closeFocused()
-	case id == "palette":
-		w.actionFinder()
 	case id == "side":
 		w.sidebar = !w.sidebar
 		w.refresh()
@@ -898,6 +899,18 @@ func (w *Workspace) paneButton(n *wsNode, id string) {
 	}
 }
 
+// isShortcut reports Ctrl+Shift+<r>, however the terminal encodes it.
+func isShortcut(ev *tcell.EventKey, r rune) bool {
+	m := ev.Modifiers()
+	if m&tcell.ModCtrl == 0 || m&tcell.ModShift == 0 {
+		return false
+	}
+	if ev.Key() == tcell.KeyRune {
+		return ev.Rune() == r || ev.Rune() == r-'a'+'A'
+	}
+	return ev.Key() == tcell.KeyCtrlA+tcell.Key(r-'a')
+}
+
 // handleKey is the application-level key handler while the workspace is
 // on screen. It returns nil for keys it consumed.
 func (w *Workspace) handleKey(ev *tcell.EventKey) *tcell.EventKey {
@@ -916,6 +929,20 @@ func (w *Workspace) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 	alt := ev.Modifiers()&tcell.ModAlt != 0
+	// Ctrl+Shift+C / Ctrl+Shift+V copy and paste like other terminals
+	// (when the terminal sends them as such and not as Ctrl+C).
+	if isShortcut(ev, 'c') {
+		if !p.CopySelection() {
+			w.flash("Nothing selected — drag over text to select it (it is copied right away)", "#FFD75F")
+		}
+		return nil
+	}
+	if isShortcut(ev, 'v') {
+		if text, _ := clipboard.ReadAll(); text != "" {
+			p.Paste(text)
+		}
+		return nil
+	}
 	switch {
 	case ev.Key() == controlKey:
 		w.mode = modeControl
@@ -996,8 +1023,6 @@ func (w *Workspace) controlKey(ev *tcell.EventKey, p *vterm.Pane) {
 		w.cycleFocus(1)
 	case '[':
 		w.cycleFocus(-1)
-	case ' ':
-		w.actionFinder()
 	case 'c':
 		w.pickCommand()
 	case 'a':
@@ -1029,9 +1054,9 @@ func (w *Workspace) reloadCommands() {
 		w.commands = cmds
 	}
 	var b strings.Builder
-	b.WriteString(" [#FFD75F::b]★ Commands[-:-:-] ")
-	b.WriteString(btn("save", "+ Save", "#FFD75F"))
-	b.WriteString(btn("cmds", "☰ All commands", "#D7D7AF"))
+	b.WriteString(" ")
+	b.WriteString(btn("cmds", "★ Commands", "#FFD75F"))
+	b.WriteString(btn("save", "+ Add", "#D7D7AF"))
 	for i, c := range w.commands {
 		num := ""
 		if i < 9 {
@@ -1040,7 +1065,7 @@ func (w *Workspace) reloadCommands() {
 		fmt.Fprintf(&b, `["cmd%d"][#d0d0d0:#3a3a3a] [#FFD75F]%s[#d0d0d0]%s [-:-][""] `, i, num, tview.Escape(truncate(c.Label(), 24)))
 	}
 	if len(w.commands) == 0 {
-		b.WriteString("[#8a8a8a]type a command in a session, then click + Save to keep it here[-]")
+		b.WriteString("[#8a8a8a]keep commands you use often: click + Add, then one click types them into a session[-]")
 	}
 	w.cmdBar.SetText(b.String())
 }
@@ -1066,6 +1091,9 @@ func (w *Workspace) runCommand(c store.Command) {
 
 // promptGuess extracts the command being typed from a shell prompt line.
 func promptGuess(line string) string {
+	// Screen lines lose their trailing spaces: "user@host:~$ " reads as
+	// "user@host:~$", an empty prompt.
+	line += " "
 	for _, sep := range []string{"$ ", "# ", "% ", "> ", "❯ "} {
 		if i := strings.LastIndex(line, sep); i >= 0 {
 			return strings.TrimSpace(line[i+len(sep):])
@@ -1074,32 +1102,7 @@ func promptGuess(line string) string {
 	return strings.TrimSpace(line)
 }
 
-func (w *Workspace) saveCommandForm() {
-	w.mode = modeTerminal
-	guess := ""
-	if p := w.activePane(); p != nil {
-		guess = promptGuess(p.CursorLine())
-	}
-	form := tview.NewForm()
-	form.SetBorder(true).SetTitle(" Save command ").SetTitleAlign(tview.AlignCenter)
-	form.AddInputField("Command", guess, 70, nil, nil)
-	form.AddInputField("Name (optional)", "", 30, nil, nil)
-	cmdField := form.GetFormItem(0).(*tview.InputField)
-	nameField := form.GetFormItem(1).(*tview.InputField)
-	nameField.SetPlaceholder("short label for the bar").SetPlaceholderTextColor(tcell.Color242)
-	form.AddButton("Save", func() {
-		if _, err := w.t.store.AddCommand(nameField.GetText(), cmdField.GetText()); err != nil {
-			w.restore()
-			w.flash(err.Error(), "#FF6B6B")
-			return
-		}
-		w.reloadCommands()
-		w.restore()
-	})
-	form.AddButton("Cancel", w.restore)
-	form.SetCancelFunc(w.restore)
-	w.t.app.SetRoot(centered(form, 90, 9), true).SetFocus(form)
-}
+func (w *Workspace) saveCommandForm() { w.commandForm(nil) }
 
 // flash shows msg in the status line for a few seconds.
 func (w *Workspace) flash(msg, color string) {
@@ -1107,29 +1110,7 @@ func (w *Workspace) flash(msg, color string) {
 	time.AfterFunc(2*time.Second, func() { w.t.app.QueueUpdateDraw(w.updateStatus) })
 }
 
-func (w *Workspace) pickCommand() {
-	w.mode = modeTerminal
-	w.reloadCommands()
-	if len(w.commands) == 0 {
-		w.flash("No saved commands yet — type one in a session and click + Save", "#FFD75F")
-		return
-	}
-	items := make([]pickItem, len(w.commands))
-	for i, c := range w.commands {
-		sec := ""
-		if c.Name != "" {
-			sec = c.Cmd
-		}
-		items[i] = pickItem{main: c.Label(), secondary: sec, search: c.Name + " " + c.Cmd}
-	}
-	w.showPicker(" Saved commands — Enter types it in the session · Ctrl+D deletes ", items, func(i int) {
-		w.runCommand(w.commands[i])
-	}, func(i int) {
-		_ = w.t.store.DeleteCommand(w.commands[i].ID)
-		w.reloadCommands()
-		w.pickCommand()
-	})
-}
+func (w *Workspace) pickCommand() { w.commandManager() }
 
 // newSessionPicker asks which server to open. dir < 0 = automatic.
 func (w *Workspace) newSessionPicker(dir int) {
@@ -1167,56 +1148,6 @@ func (w *Workspace) newSessionPicker(dir int) {
 	}, nil)
 }
 
-// actionFinder lists every action, server and saved command in one
-// searchable list.
-func (w *Workspace) actionFinder() {
-	w.mode = modeTerminal
-	type entry struct {
-		item pickItem
-		run  func()
-	}
-	var entries []entry
-	add := func(main, sec string, run func()) {
-		entries = append(entries, entry{pickItem{main: main, secondary: sec, search: main + " " + sec}, run})
-	}
-	add("New session", "pick a server, opens next to the current one", func() { w.newSessionPicker(-1) })
-	add("Split right", "open a server side by side", func() { w.newSessionPicker(tview.FlexColumn) })
-	add("Split down", "open a server below", func() { w.newSessionPicker(tview.FlexRow) })
-	add("Popup window", "open a server in a window above the panes", func() { w.newSessionPicker(dirFloat) })
-	add("Switch tabs / panes view", "one session full screen, or all tiled", func() { w.tabs = !w.tabs; w.restore() })
-	add("Close session", "end the highlighted session", func() { w.restore(); w.closeFocused() })
-	add("Save command", "keep the command being typed in the bar", w.saveCommandForm)
-	add("Show / hide session list", "", func() { w.sidebar = !w.sidebar; w.restore() })
-	add("Back to server list", "sessions keep running", w.hide)
-	add("Help", "mouse and keyboard cheatsheet", w.showHelp)
-	add("Even sizes", "give every split pane the same space", func() { w.restore(); w.evenSizes() })
-	for _, n := range w.leaves() {
-		name := n.pane.Label()
-		add("Go to "+name, n.target, func() { w.restore(); w.focus(n) })
-		add("Full screen "+name, "fill the whole terminal with it", func() { w.zoom(n) })
-		add("Rename "+name, "give the session a name you remember", func() { w.renameForm(n) })
-		add("Pop out "+name, "move it into a popup window", func() { w.restore(); w.popOut(n) })
-	}
-	for _, f := range w.floats {
-		name := f.node.pane.Label()
-		add("Go to "+name, "popup · "+f.node.target, func() { w.restore(); w.focusFloat(f) })
-		add("Full screen "+name, "fill the whole terminal with it", func() { w.zoom(f.node) })
-		add("Rename "+name, "give the session a name you remember", func() { w.renameForm(f.node) })
-		add("Dock "+name, "move the popup into the split panes", func() { w.restore(); w.dock(f) })
-	}
-	for _, s := range w.t.store.List() {
-		add("Open "+s.Alias, s.Target(), func() { w.restore(); w.open(&s, -1) })
-	}
-	for _, c := range w.commands {
-		add("Type "+c.Label(), c.Cmd, func() { w.runCommand(c) })
-	}
-	items := make([]pickItem, len(entries))
-	for i, e := range entries {
-		items[i] = e.item
-	}
-	w.showPicker(" Find action ", items, func(i int) { entries[i].run() }, nil)
-}
-
 func (w *Workspace) showHelp() {
 	w.mode = modeTerminal
 	text := `[#55D7FF::b]Buttons on each session's title bar[-:-:-]
@@ -1230,10 +1161,8 @@ func (w *Workspace) showHelp() {
 
 [#55D7FF::b]Top bars[-:-:-]
   ⊟ Even sizes   same space for every split pane (drag borders to resize)
-  ⌕ Search       one searchable list of every action, session, server
-                 and saved command
-  ★ Commands     + Save keeps the command you are typing; a chip types
-                 it into the session; ☰ All commands lists, runs, deletes
+  ★ Commands     your saved commands: ▶ type · ↵ run · + new · ✎ edit ·
+                 ✕ remove. + Add saves one; a chip types it in one click
 
 [#55D7FF::b]Mouse — works like a normal terminal[-:-:-]
   Click a session to type in it · wheel scrolls back · drag selects and
@@ -1245,7 +1174,7 @@ func (w *Workspace) showHelp() {
 [#FFD75F::b]Keyboard (optional)[-:-:-]
   Ctrl+C always goes to the program. Alt+←↑↓→ moves between sessions.
   Ctrl+A, then: v/s split · n new · x close · z full screen · r rename
-  e even sizes · t tabs view · Space search · c commands · a save
+  e even sizes · t tabs view · c commands · a add command
   1-9 type a command · ←↑↓→ move · Esc back · Ctrl+A again sends Ctrl+A
 
 [#8a8a8a]Esc closes this help[-]`
@@ -1259,7 +1188,7 @@ func (w *Workspace) showHelp() {
 		}
 		return a, ev
 	})
-	w.t.app.SetRoot(centered(tv, 80, 36), true).SetFocus(tv)
+	w.overlay(tv, 80, 36, tv)
 }
 
 type pickItem struct{ main, secondary, search string }
@@ -1321,7 +1250,7 @@ func (w *Workspace) showPicker(title string, items []pickItem, onPick, onDelete 
 	})
 	box := tview.NewFlex().SetDirection(tview.FlexRow).AddItem(input, 1, 0, true).AddItem(list, 0, 1, false)
 	box.SetBorder(true).SetTitle(title)
-	w.t.app.SetRoot(centered(box, 80, 22), true).SetFocus(input)
+	w.overlay(box, 80, 22, input)
 }
 
 func centered(p tview.Primitive, width, height int) tview.Primitive {

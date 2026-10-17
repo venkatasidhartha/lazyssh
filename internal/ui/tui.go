@@ -65,7 +65,17 @@ func (t *App) Run() error {
 	t.workspace = newWorkspace(t)
 	t.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		if t.inWorkspace {
-			return t.workspace.handleKey(ev)
+			if ev = t.workspace.handleKey(ev); ev == nil {
+				return nil
+			}
+		}
+		// tview quits on Ctrl+C. lazyssh never does: in a session it goes
+		// to the program, anywhere else it is ignored (q quits).
+		if ev.Key() == tcell.KeyCtrlC {
+			if !t.inWorkspace {
+				t.showStatusTempColor("Ctrl+C does not quit lazyssh — press q to quit", "#FFD75F")
+			}
+			return nil
 		}
 		return ev
 	})

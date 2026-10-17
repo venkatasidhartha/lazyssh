@@ -230,47 +230,7 @@ func (w *Workspace) restoreLayout() int {
 	w.restoring = true
 	defer func() { w.restoring = false }()
 	var focused *wsNode
-	var build func(sn savedNode) *wsNode
-	build = func(sn savedNode) *wsNode {
-		if len(sn.Kids) == 0 {
-			var srv *domain.Server
-			if sn.ServerID != "" {
-				s, ok := w.t.store.Get(sn.ServerID)
-				if !ok {
-					return nil // server deleted since
-				}
-				srv = &s
-			}
-			n := w.newNode(sn.Label, sn.Target, srv)
-			n.weight = max(1, sn.Weight)
-			if _, ok := live[sn.Session]; ok && sn.Session != "" {
-				w.attachSession(n, sn.Session)
-				delete(live, sn.Session)
-			} else {
-				w.startSession(n)
-			}
-			if sn.Focused {
-				focused = n
-			}
-			return n
-		}
-		split := &wsNode{dir: sn.Dir, weight: max(1, sn.Weight)}
-		for _, k := range sn.Kids {
-			if kn := build(k); kn != nil {
-				kn.parent = split
-				split.kids = append(split.kids, kn)
-			}
-		}
-		switch len(split.kids) {
-		case 0:
-			return nil
-		case 1:
-			only := split.kids[0]
-			only.parent, only.weight = nil, split.weight
-			return only
-		}
-		return split
-	}
+	build := func(sn savedNode) *wsNode { return w.buildSaved(sn, live, &focused, false) }
 	if l.Root != nil {
 		w.root = build(*l.Root)
 	}
@@ -333,6 +293,54 @@ func floatNodes(fs []*floatWin) []*wsNode {
 		out[i] = f.node
 	}
 	return out
+}
+
+// buildSaved makes the sessions of a saved layout node: reattached when
+// they are still running in the service (live), started otherwise. With
+// fresh, names are made unique next to the sessions already open.
+func (w *Workspace) buildSaved(sn savedNode, live map[string]sessions.Info, focused **wsNode, fresh bool) *wsNode {
+	if len(sn.Kids) == 0 {
+		var srv *domain.Server
+		if sn.ServerID != "" {
+			s, ok := w.t.store.Get(sn.ServerID)
+			if !ok {
+				return nil // server deleted since
+			}
+			srv = &s
+		}
+		label := sn.Label
+		if fresh {
+			label = w.uniqueLabel(label)
+		}
+		n := w.newNode(label, sn.Target, srv)
+		n.weight = max(1, sn.Weight)
+		if _, ok := live[sn.Session]; ok && sn.Session != "" {
+			w.attachSession(n, sn.Session)
+			delete(live, sn.Session)
+		} else {
+			w.startSession(n)
+		}
+		if sn.Focused || *focused == nil {
+			*focused = n
+		}
+		return n
+	}
+	split := &wsNode{dir: sn.Dir, weight: max(1, sn.Weight)}
+	for _, k := range sn.Kids {
+		if kn := w.buildSaved(k, live, focused, fresh); kn != nil {
+			kn.parent = split
+			split.kids = append(split.kids, kn)
+		}
+	}
+	switch len(split.kids) {
+	case 0:
+		return nil
+	case 1:
+		only := split.kids[0]
+		only.parent, only.weight = nil, split.weight
+		return only
+	}
+	return split
 }
 
 // attachSession shows a session that is running in the service.

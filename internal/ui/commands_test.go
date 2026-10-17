@@ -113,7 +113,7 @@ func TestCtrlCNeverQuits(t *testing.T) {
 	alive("a dialog")
 	sim.InjectKey(tcell.KeyEsc, 0, tcell.ModNone)
 
-	clickText(t, app, sim, "☰ Server list")
+	clickText(t, app, sim, "☰ Servers")
 	waitFor(t, app, sim, "No servers yet")
 	sim.InjectKey(tcell.KeyCtrlC, 0, tcell.ModCtrl)
 	alive("the server list")

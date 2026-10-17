@@ -57,6 +57,7 @@ type Workspace struct {
 
 	view     *tview.Flex
 	actions  *tview.TextView
+	quitBar  *tview.TextView
 	cmdBar   *tview.TextView
 	list     *tview.List
 	panes    *paneArea
@@ -96,6 +97,8 @@ const dirFloat = -2
 func newWorkspace(t *App) *Workspace {
 	w := &Workspace{t: t, sidebar: true}
 	w.actions = w.buttonBar()
+	w.quitBar = w.buttonBar() // kept apart so it is never cut off
+	w.quitBar.SetText(btn("quit", "⏻ Quit", "#FF8787"))
 	w.cmdBar = w.buttonBar()
 	w.list = tview.NewList().ShowSecondaryText(true).SetSecondaryTextColor(tcell.Color243).
 		SetHighlightFullLine(true).SetSelectedBackgroundColor(tcell.Color238).SetSelectedTextColor(tcell.Color255)
@@ -135,6 +138,7 @@ func newWorkspace(t *App) *Workspace {
 		btn("local", "▶ Open a local terminal", "#55D7FF") + "\n\n" +
 		btn("new", "+ Connect to a server", "#87AFD7") + "\n\n" +
 		btn("addserver", "+ Add a server", "#87D7AF") + "\n\n" +
+		btn("groups", "▣ Open a saved group", "#87D7AF") + "\n\n" +
 		"[#8a8a8a]Split panes, popups and saved commands work with local terminals too.[-]")
 	w.panes = newPaneArea(w)
 	w.body = tview.NewFlex()
@@ -143,7 +147,7 @@ func newWorkspace(t *App) *Workspace {
 	w.zoomView = tview.NewFlex().SetDirection(tview.FlexRow)
 	w.layer = newFloatLayer(w, w.body)
 	w.view = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(w.actions, 1, 0, false).
+		AddItem(tview.NewFlex().AddItem(w.actions, 0, 1, false).AddItem(w.quitBar, 10, 0, false), 1, 0, false).
 		AddItem(w.cmdBar, 1, 0, false).
 		AddItem(w.layer, 0, 1, true).
 		AddItem(w.status, 1, 0, false)
@@ -196,12 +200,12 @@ func (w *Workspace) drawActions() {
 		btn("splitv", "⇆ Split right", "#87AFD7") +
 		btn("splith", "⇅ Split down", "#87AFD7") +
 		btn("popup", "❐ Popup", "#D7AFFF") +
+		btn("groups", "▣ Groups", "#87D7AF") +
 		btn("even", "⊟ Even sizes", "#87AFD7") +
 		btn("layout", layout, "#87AFD7") +
-		btn("close", "✕ Close", "#FF8787") +
 		btn("side", side, "#8A8A8A") +
 		btn("help", "? Help", "#8A8A8A") +
-		btn("servers", "☰ Server list", "#8A8A8A"))
+		btn("servers", "☰ Servers", "#8A8A8A"))
 }
 
 // ---------------------------------------------------------------------------
@@ -478,6 +482,14 @@ func (w *Workspace) fillList() {
 		add("[#87AFD7]⇢[-] "+tview.Escape(s.Alias), "    "+tview.Escape(s.Target()), listRow{onPick: func() { w.open(&s, -1) }})
 	}
 	add("[#87D7AF]+ Add server[-]", "", listRow{onPick: w.addServer})
+
+	// Saved groups: one click opens all their sessions.
+	add("[#8a8a8a::b]─── Groups ───[-:-:-]", "    [#8a8a8a]▣ manage groups[-]", listRow{onPick: w.groupManager})
+	groups, _ := w.t.store.Groups()
+	for _, g := range groups {
+		add("[#87D7AF]▣[-] "+tview.Escape(g.Name), fmt.Sprintf("    %d session%s", len(g.Sessions), plural(len(g.Sessions))), listRow{onPick: func() { w.openGroup(g) }})
+	}
+	add("[#FFD75F]+ Save as group[-]", "", listRow{onPick: w.saveGroupForm})
 	w.list.SetCurrentItem(cur)
 }
 
@@ -772,6 +784,10 @@ func (w *Workspace) button(id string) {
 		w.renameForm(w.activeNode())
 	case id == "even":
 		w.evenSizes()
+	case id == "quit":
+		w.t.handleQuit()
+	case id == "groups":
+		w.groupManager()
 	case id == "popup":
 		w.newSessionPicker(dirFloat)
 	case strings.HasPrefix(id, "float"):
@@ -1085,6 +1101,9 @@ func (w *Workspace) showHelp() {
                  title to move · drag ◢ to resize
 
 [#55D7FF::b]Top bars[-:-:-]
+  ⏻ Quit         leave lazyssh (sessions can keep running in the background)
+  ▣ Groups       save the open sessions as a group (e.g. "prod monitoring")
+                 and open all of them again with one click
   ⊟ Even sizes   same space for every split pane (drag borders to resize)
   ★ Commands     your saved commands: ▶ type · ↵ run · + new · ✎ edit ·
                  ✕ remove. + Add saves one; a chip types it in one click
@@ -1119,7 +1138,7 @@ func (w *Workspace) showHelp() {
 		}
 		return a, ev
 	})
-	w.overlay(tv, 80, 42, tv)
+	w.overlay(tv, 80, 45, tv)
 }
 
 type pickItem struct{ main, secondary, search string }

@@ -149,7 +149,7 @@ func (t *App) handleQuit() {
 					back()
 				}
 			})
-		t.app.SetRoot(modal, true)
+		t.showModal(modal)
 		return
 	}
 	modal := tview.NewModal().
@@ -162,7 +162,19 @@ func (t *App) handleQuit() {
 			}
 			t.returnToMain()
 		})
-	t.app.SetRoot(modal, true)
+	t.showModal(modal)
+}
+
+// showModal shows a yes/no dialog. A quick second click (tview calls it a
+// double-click, even on another spot) still presses a button.
+func (t *App) showModal(m *tview.Modal) {
+	m.SetMouseCapture(func(a tview.MouseAction, ev *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if a == tview.MouseLeftDoubleClick {
+			a = tview.MouseLeftClick
+		}
+		return a, ev
+	})
+	t.app.SetRoot(m, true)
 }
 
 // closeAllPanes runs when lazyssh exits. Sessions in the background
@@ -449,7 +461,7 @@ func (t *App) showDeleteConfirmModal(s domain.Server) {
 		}
 		return event
 	})
-	t.app.SetRoot(modal, true)
+	t.showModal(modal)
 }
 
 func (t *App) showEditTagsForm(s domain.Server) {
@@ -504,7 +516,7 @@ func (t *App) showPortForwardForm(s domain.Server) {
 	showErr := func(msg string) {
 		modal := tview.NewModal().SetText(msg).AddButtons([]string{"OK"}).
 			SetDoneFunc(func(int, string) { t.app.SetRoot(form, true).SetFocus(form) })
-		t.app.SetRoot(modal, true)
+		t.showModal(modal)
 	}
 	form.AddButton("Start", func() {
 		spec := sshx.ForwardSpec{Kind: sshx.ForwardKind(kinds[kind]), Bind: strings.TrimSpace(bindField.GetText())}

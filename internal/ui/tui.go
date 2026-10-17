@@ -125,7 +125,19 @@ func (t *App) initializeTheme() {
 
 func (t *App) buildComponents() {
 	t.header = NewAppHeader(t.version, t.serverCount).
-		OnTerminal(func() { go t.app.QueueUpdateDraw(t.openTerminal) })
+		OnButton(func(id string) {
+			go t.app.QueueUpdateDraw(func() {
+				switch id {
+				case "term":
+					t.openTerminal()
+				case "groups":
+					t.workspace.show()
+					t.workspace.groupManager()
+				case "quit":
+					t.handleQuit()
+				}
+			})
+		})
 	t.searchBar = NewSearchBar().
 		OnSearch(func(string) { t.refreshServerList() }).
 		OnEscape(t.blurSearchBar).

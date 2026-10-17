@@ -235,7 +235,7 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 	}
 
 	// Back to the server list and in again: sessions are still there.
-	clickText(t, app, sim, "☰ Server list")
+	clickText(t, app, sim, "☰ Servers")
 	waitFor(t, app, sim, "No servers yet")
 	typeText(sim, "w")
 	waitFor(t, app, sim, "drag-me-please")

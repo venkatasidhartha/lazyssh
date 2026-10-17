@@ -21,13 +21,14 @@ const Author = "Venkata Sidhartha K"
 
 type AppHeader struct {
 	*tview.Flex
-	right      *tview.TextView
-	count      func() int
-	onTerminal func()
+	right    *tview.TextView
+	count    func() int
+	onButton func(id string)
 }
 
-// OnTerminal is called when the "Terminal" button is clicked.
-func (h *AppHeader) OnTerminal(f func()) *AppHeader { h.onTerminal = f; return h }
+// OnButton is called with "term", "groups" or "quit" when a header button
+// is clicked.
+func (h *AppHeader) OnButton(f func(id string)) *AppHeader { h.onButton = f; return h }
 
 func NewAppHeader(version string, count func() int) *AppHeader {
 	bg := tcell.Color234
@@ -35,7 +36,7 @@ func NewAppHeader(version string, count func() int) *AppHeader {
 
 	left := tview.NewTextView().SetDynamicColors(true).SetRegions(true).SetTextAlign(tview.AlignLeft)
 	left.SetBackgroundColor(bg)
-	left.SetText(`🚀 [#FFFFFF::b]lazy[-][#55D7FF::b]ssh[-:-:-]  ["term"][black:#55D7FF] ▶ Terminal [-:-][""]`)
+	left.SetText(`🚀 [#FFFFFF::b]lazy[-][#55D7FF::b]ssh[-:-:-]  ["term"][black:#55D7FF] ▶ Terminal [-:-][""] ["groups"][black:#87D7AF] ▣ Groups [-:-][""] ["quit"][black:#FF8787] ⏻ Quit [-:-][""]`)
 	left.SetMouseCapture(func(a tview.MouseAction, ev *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
 		if a == tview.MouseLeftDoubleClick {
 			a = tview.MouseLeftClick
@@ -43,9 +44,9 @@ func NewAppHeader(version string, count func() int) *AppHeader {
 		return a, ev
 	})
 	left.SetHighlightedFunc(func(added, _, _ []string) {
-		if len(added) > 0 && h.onTerminal != nil {
+		if len(added) > 0 && h.onButton != nil {
 			left.Highlight()
-			h.onTerminal()
+			h.onButton(added[0])
 		}
 	})
 

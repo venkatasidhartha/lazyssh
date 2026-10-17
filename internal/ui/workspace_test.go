@@ -117,13 +117,52 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 
 	// Split right by clicking the toolbar button.
 	clickText(t, app, sim, "⇆ Split right")
-	waitFor(t, app, sim, "New session — pick a server")
+	waitFor(t, app, sim, "Split right — pick a server")
 	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone) // "Local shell"
 	time.Sleep(300 * time.Millisecond)
 	if n := paneCount(app); n != 2 {
 		t.Fatalf("panes = %d, want 2", n)
 	}
 	waitFor(t, app, sim, "2 local")
+
+	// Dragging the border between the two panes resizes them.
+	var lw, rx, ry int
+	app.app.QueueUpdate(func() {
+		l := app.workspace.leaves()
+		_, _, lw, _ = l[0].pane.GetRect()
+		rx, ry, _, _ = l[1].pane.GetRect()
+	})
+	sim.InjectMouse(rx, ry+5, tcell.Button1, tcell.ModNone)
+	time.Sleep(20 * time.Millisecond)
+	sim.InjectMouse(rx-20, ry+5, tcell.Button1, tcell.ModNone)
+	time.Sleep(20 * time.Millisecond)
+	sim.InjectMouse(rx-20, ry+5, tcell.ButtonNone, tcell.ModNone)
+	time.Sleep(200 * time.Millisecond)
+	var lw2 int
+	app.app.QueueUpdate(func() { _, _, lw2, _ = app.workspace.leaves()[0].pane.GetRect() })
+	if lw2 > lw-15 || lw2 < lw-25 {
+		t.Fatalf("left pane width %d -> %d after dragging the border 20 columns", lw, lw2)
+	}
+
+	// The ⇅ button in the pane's own title bar splits that pane.
+	clickPaneButton(t, app, sim, "splith")
+	waitFor(t, app, sim, "Split down — pick a server")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	time.Sleep(300 * time.Millisecond)
+	if n := paneCount(app); n != 3 {
+		t.Fatalf("panes = %d, want 3", n)
+	}
+	// ⤢ maximizes it, clicking again shows all, ✕ closes it.
+	clickPaneButton(t, app, sim, "zoom")
+	waitFor(t, app, sim, "Panes view")
+	clickPaneButton(t, app, sim, "zoom")
+	waitFor(t, app, sim, "Tabs view")
+	clickPaneButton(t, app, sim, "close")
+	time.Sleep(200 * time.Millisecond)
+	if n := paneCount(app); n != 2 {
+		t.Fatalf("panes after ✕ = %d, want 2", n)
+	}
+	app.app.QueueUpdate(func() { app.workspace.focus(app.workspace.leaves()[1]) })
 
 	// Clicking a saved command chip types it (without Enter).
 	clickText(t, app, sim, "1 greet")
@@ -135,7 +174,7 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 	sim.InjectKey(tcell.KeyCtrlA, 0, tcell.ModCtrl)
 	waitFor(t, app, sim, "CONTROL")
 	typeText(sim, "1")
-	waitFor(t, app, sim, "TERMINAL")
+	waitFor(t, app, sim, "click a pane to type in it")
 	waitFor(t, app, sim, "$ echo saved-cmd-ran ")
 
 	// Drag over text in the first pane copies it.
@@ -203,6 +242,26 @@ func findText(t *testing.T, a *App, s tcell.SimulationScreen, text string) (int,
 	}
 	t.Fatalf("%q not on screen", text)
 	return 0, 0
+}
+
+// clickPaneButton clicks a title-bar button of the focused pane.
+func clickPaneButton(t *testing.T, a *App, s tcell.SimulationScreen, id string) {
+	t.Helper()
+	x, y := -1, -1
+	a.app.QueueUpdate(func() {
+		for _, h := range a.workspace.panes.hits {
+			if h.id == id && h.node == a.workspace.focused {
+				x, y = h.x0+1, h.y
+			}
+		}
+	})
+	if x < 0 {
+		t.Fatalf("no %s button on the focused pane:\n%s", id, readScreen(a, s))
+	}
+	s.InjectMouse(x, y, tcell.Button1, tcell.ModNone)
+	time.Sleep(20 * time.Millisecond)
+	s.InjectMouse(x, y, tcell.ButtonNone, tcell.ModNone)
+	time.Sleep(150 * time.Millisecond)
 }
 
 func clickText(t *testing.T, a *App, s tcell.SimulationScreen, text string) {

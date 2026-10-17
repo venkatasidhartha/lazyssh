@@ -40,6 +40,9 @@ type wsNode struct {
 	dir    int    // tview.FlexColumn (side by side) or tview.FlexRow (stacked)
 	kids   []*wsNode
 	parent *wsNode
+	server *domain.Server // nil for a local shell
+	weight int            // share of the parent split (dragging a border changes it)
+	prim   tview.Primitive
 }
 
 type Workspace struct {
@@ -55,7 +58,7 @@ type Workspace struct {
 	actions  *tview.TextView
 	cmdBar   *tview.TextView
 	list     *tview.List
-	panes    *tview.Flex
+	panes    *paneArea
 	body     *tview.Flex
 	status   *tview.TextView
 	commands []store.Command
@@ -75,7 +78,7 @@ func newWorkspace(t *App) *Workspace {
 		}
 	})
 	w.list.SetSelectedFunc(func(i int, _, _ string, _ rune) { w.listPick(i) })
-	w.panes = tview.NewFlex()
+	w.panes = newPaneArea(w)
 	w.body = tview.NewFlex()
 	w.status = tview.NewTextView().SetDynamicColors(true)
 	w.status.SetBackgroundColor(tcell.Color235)
@@ -169,14 +172,19 @@ func (w *Workspace) insert(leaf *wsNode, dir int) {
 	cur := w.focused
 	switch {
 	case cur == nil:
+		leaf.weight = 1000
 		w.root = leaf
 	case cur.parent != nil && cur.parent.dir == dir:
+		// The new session takes half of the current one's space.
+		cur.weight = max(1, cur.weight/2)
+		leaf.weight = cur.weight
 		par := cur.parent
 		i := indexOf(par.kids, cur)
 		par.kids = append(par.kids[:i+1], append([]*wsNode{leaf}, par.kids[i+1:]...)...)
 		leaf.parent = par
 	default:
-		split := &wsNode{dir: dir}
+		split := &wsNode{dir: dir, weight: cur.weight}
+		cur.weight, leaf.weight = 1000, 1000
 		w.replace(cur, split)
 		split.kids = []*wsNode{cur, leaf}
 		cur.parent, leaf.parent = split, split
@@ -205,12 +213,14 @@ func indexOf(kids []*wsNode, n *wsNode) int {
 
 func (w *Workspace) build(n *wsNode) tview.Primitive {
 	if n.pane != nil {
+		n.prim = n.pane
 		return n.pane
 	}
 	f := tview.NewFlex().SetDirection(n.dir)
 	for _, k := range n.kids {
-		f.AddItem(w.build(k), 0, 1, false)
+		f.AddItem(w.build(k), 0, max(1, k.weight), false)
 	}
+	n.prim = f
 	return f
 }
 
@@ -292,7 +302,7 @@ func (w *Workspace) updateStatus() {
 		return
 	}
 	n := w.PaneCount()
-	w.status.SetText(fmt.Sprintf(" [black:#55D7FF:b] TERMINAL [-:-:-] [#8a8a8a]%d session%s · typing goes to the highlighted pane · mouse wheel scrolls · drag to copy · right-click pastes ·[-] [white]Ctrl+A[-] [#8a8a8a]control keys[-]", n, plural(n)))
+	w.status.SetText(fmt.Sprintf(" [#8a8a8a]%d session%s · click a pane to type in it · [white]⇆ ⇅[-] on a pane splits it · drag a border to resize · wheel scrolls · drag copies · right-click pastes[-]", n, plural(n)))
 }
 
 func plural(n int) string {
@@ -375,7 +385,8 @@ func (w *Workspace) open(s *domain.Server, dir int) {
 			}
 		}
 	})
-	leaf := &wsNode{pane: p, target: target}
+	p.SetTitleAlign(tview.AlignLeft)
+	leaf := &wsNode{pane: p, target: target, server: s}
 	w.insert(leaf, dir)
 	w.mode = modeTerminal
 	w.refresh()
@@ -416,6 +427,7 @@ func (w *Workspace) closeFocused() {
 		i := indexOf(par.kids, n)
 		par.kids = append(par.kids[:i], par.kids[i+1:]...)
 		if len(par.kids) == 1 {
+			par.kids[0].weight = par.weight
 			w.replace(par, par.kids[0])
 		}
 	}
@@ -560,6 +572,26 @@ func (w *Workspace) button(id string) {
 		if i, err := strconv.Atoi(strings.TrimPrefix(id, "cmd")); err == nil && i < len(w.commands) {
 			w.runCommand(w.commands[i])
 		}
+	}
+}
+
+// paneButton runs a button from a pane's title bar on that pane.
+func (w *Workspace) paneButton(n *wsNode, id string) {
+	if indexOf(w.leaves(), n) < 0 {
+		return
+	}
+	w.focused = n
+	w.mode = modeTerminal
+	switch id {
+	case "splitv":
+		w.newSessionPicker(tview.FlexColumn)
+	case "splith":
+		w.newSessionPicker(tview.FlexRow)
+	case "zoom":
+		w.tabs = !w.tabs
+		w.refresh()
+	case "close":
+		w.closeFocused()
 	}
 }
 
@@ -792,18 +824,32 @@ func (w *Workspace) newSessionPicker(dir int) {
 	w.mode = modeTerminal
 	servers := w.t.store.List()
 	sortServers(servers, SortByLastSeenDesc)
-	items := []pickItem{{main: "Local shell", secondary: "this machine", search: "local shell"}}
-	for _, s := range servers {
-		items = append(items, pickItem{main: s.Alias, secondary: s.Target(), search: s.Alias + " " + s.Target() + " " + strings.Join(s.Tags, " ")})
+	var items []pickItem
+	var opens []func()
+	add := func(main, sec, search string, open func()) {
+		items = append(items, pickItem{main: main, secondary: sec, search: search})
+		opens = append(opens, open)
 	}
-	w.showPicker(" New session — pick a server ", items, func(i int) {
+	// Splitting a server session: opening the same server again is the
+	// usual wish (logs on one side, a shell on the other).
+	if cur := w.focused; cur != nil && cur.server != nil {
+		same := *cur.server
+		add("Same server — "+same.Alias, same.Target(), "same "+same.Alias, func() { w.open(&same, dir) })
+	}
+	add("Local shell", "this machine", "local shell", func() { w.open(nil, dir) })
+	for _, s := range servers {
+		add(s.Alias, s.Target(), s.Alias+" "+s.Target()+" "+strings.Join(s.Tags, " "), func() { w.open(&s, dir) })
+	}
+	title := " New session — pick a server "
+	switch dir {
+	case tview.FlexColumn:
+		title = " Split right — pick a server "
+	case tview.FlexRow:
+		title = " Split down — pick a server "
+	}
+	w.showPicker(title, items, func(i int) {
 		w.restore()
-		if i == 0 {
-			w.open(nil, dir)
-			return
-		}
-		s := servers[i-1]
-		w.open(&s, dir)
+		opens[i]()
 	}, nil)
 }
 
@@ -853,15 +899,17 @@ func (w *Workspace) showHelp() {
   Double-click             select a word
   Right-click              paste
   Shift + drag             select inside mouse apps (htop, vim…)
+  ⇆ ⇅ ⤢ ✕ on a pane        split right / split down / maximize / close it
+  Drag a pane border       resize the panes
   Buttons on top           every action, no keys needed
 
-[#55D7FF::b]Keyboard — TERMINAL mode (default)[-:-:-]
+[#55D7FF::b]Keyboard (optional) — TERMINAL mode[-:-:-]
   Every key goes to the highlighted session. Ctrl+C never quits lazyssh.
   Alt+←↑↓→                 move between sessions
   Shift+PgUp / PgDn        scroll back
   Ctrl+A                   switch to CONTROL mode (border turns yellow)
 
-[#FFD75F::b]Keyboard — CONTROL mode[-:-:-]
+[#FFD75F::b]Keyboard (optional) — CONTROL mode, for people who prefer keys[-:-:-]
   v  split right     s  split down     n  new session    x  close
   t  tabs / panes    ←↑↓→ or hjkl  move     [ ]  previous / next
   Space  find action    c  commands    a  save command    1-9  type command

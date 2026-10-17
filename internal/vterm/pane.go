@@ -55,6 +55,10 @@ type Pane struct {
 	mouseModes atomic.Int32 // bit set of mouse tracking modes
 	title      atomic.Value // string
 
+	// scr guards emu's screen: the emulator hands out pointers to its
+	// cells, so reads must not overlap a write.
+	scr sync.RWMutex
+
 	label   string
 	redraw  func()
 	pending atomic.Bool
@@ -180,7 +184,9 @@ func (p *Pane) Output() io.Writer { return outputWriter{p} }
 type outputWriter struct{ p *Pane }
 
 func (o outputWriter) Write(b []byte) (int, error) {
+	o.p.scr.Lock()
 	n, err := o.p.emu.Write(b)
+	o.p.scr.Unlock()
 	o.p.scheduleRedraw()
 	return n, err
 }
@@ -188,7 +194,9 @@ func (o outputWriter) Write(b []byte) (int, error) {
 // Message writes text straight into the screen (status lines before and
 // after a program runs).
 func (p *Pane) Message(s string) {
+	p.scr.Lock()
 	_, _ = p.emu.Write([]byte(s))
+	p.scr.Unlock()
 	p.scheduleRedraw()
 }
 
@@ -246,7 +254,9 @@ func (p *Pane) Type(text string) {
 // Paste sends text as a paste (bracketed when the program asked for it).
 func (p *Pane) Paste(text string) {
 	p.scrollToBottom()
+	p.scr.Lock()
 	p.emu.Paste(text)
+	p.scr.Unlock()
 }
 
 func (p *Pane) scrollToBottom() {
@@ -266,6 +276,7 @@ func (p *Pane) cellAt(x, line, sbLen int) *uv.Cell {
 	return p.emu.CellAt(x, line-sbLen)
 }
 
+// lineText needs p.scr held.
 func (p *Pane) lineText(line, sbLen, from, to int) string {
 	var b strings.Builder
 	for x := from; x < to; x++ {
@@ -288,12 +299,16 @@ func (p *Pane) lineText(line, sbLen, from, to int) string {
 // CursorLine returns the text of the cursor's line up to the cursor (what
 // is being typed at a shell prompt, prompt included).
 func (p *Pane) CursorLine() string {
+	p.scr.RLock()
+	defer p.scr.RUnlock()
 	pos := p.emu.CursorPosition()
 	return p.lineText(pos.Y, 0, 0, p.emu.Width())
 }
 
 // ScreenText returns the visible screen (for tests and debugging).
 func (p *Pane) ScreenText() string {
+	p.scr.RLock()
+	defer p.scr.RUnlock()
 	var lines []string
 	for y := 0; y < p.emu.Height(); y++ {
 		lines = append(lines, p.lineText(y, 0, 0, p.emu.Width()))
@@ -316,12 +331,16 @@ func (p *Pane) Draw(screen tcell.Screen) {
 	be := p.be
 	p.mu.Unlock()
 	if resized {
+		p.scr.Lock()
 		p.emu.Resize(w, h)
+		p.scr.Unlock()
 		if be != nil {
 			_ = be.Resize(w, h)
 		}
 	}
 
+	p.scr.RLock()
+	defer p.scr.RUnlock()
 	sbLen := p.emu.ScrollbackLen()
 	if p.emu.IsAltScreen() {
 		p.scroll = 0
@@ -421,6 +440,8 @@ func (p *Pane) selected(x, line int) bool {
 }
 
 func (p *Pane) selectionText() string {
+	p.scr.RLock()
+	defer p.scr.RUnlock()
 	sbLen := p.emu.ScrollbackLen()
 	s, e := selOrder(p.selA, p.selB)
 	w := p.emu.Width()
@@ -440,6 +461,8 @@ func (p *Pane) selectionText() string {
 
 // selectWord selects the word under (x, line).
 func (p *Pane) selectWord(x, line int) {
+	p.scr.RLock()
+	defer p.scr.RUnlock()
 	sbLen := p.emu.ScrollbackLen()
 	isWord := func(x int) bool {
 		c := p.cellAt(x, line, sbLen)
@@ -492,10 +515,10 @@ func (p *Pane) InputHandler() func(*tcell.EventKey, func(tview.Primitive)) {
 }
 
 func (p *Pane) scrollBy(n int) {
-	if p.emu.IsAltScreen() {
+	if p.altScreen() {
 		return
 	}
-	p.scroll = max(0, min(p.scroll+n, p.emu.ScrollbackLen()))
+	p.scroll = max(0, min(p.scroll+n, p.sbLen()))
 }
 
 func (p *Pane) PasteHandler() func(string, func(tview.Primitive)) {
@@ -513,7 +536,7 @@ func (p *Pane) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tv
 		ix, iy, w, h := p.GetInnerRect()
 		col := max(0, min(mx-ix, w-1))
 		row := max(0, min(my-iy, h-1))
-		line := p.emu.ScrollbackLen() - p.scroll + row
+		line := p.sbLen() - p.scroll + row
 		if action == tview.MouseLeftDown || action == tview.MouseRightDown || action == tview.MouseMiddleDown {
 			setFocus(p)
 		}
@@ -528,14 +551,14 @@ func (p *Pane) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tv
 
 		switch action {
 		case tview.MouseScrollUp:
-			if p.emu.IsAltScreen() {
+			if p.altScreen() {
 				p.sendArrows(true) // e.g. less, man: scroll their own view
 			} else {
 				p.scrollBy(wheelLines)
 			}
 			return true, nil
 		case tview.MouseScrollDown:
-			if p.emu.IsAltScreen() {
+			if p.altScreen() {
 				p.sendArrows(false)
 			} else {
 				p.scrollBy(-wheelLines)
@@ -554,7 +577,7 @@ func (p *Pane) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, func(tv
 				} else if my >= iy+h {
 					p.scrollBy(-1)
 				}
-				line = p.emu.ScrollbackLen() - p.scroll + row
+				line = p.sbLen() - p.scroll + row
 				p.selB = [2]int{col, line}
 				p.hasSel = p.selA != p.selB
 				return true, p
@@ -607,28 +630,28 @@ func (p *Pane) sendMouse(action tview.MouseAction, ev *tcell.EventMouse, col, ro
 	switch action {
 	case tview.MouseLeftDown:
 		m.Button = uv.MouseLeft
-		p.emu.SendMouse(uv.MouseClickEvent(m))
+		p.mouse(uv.MouseClickEvent(m))
 	case tview.MouseMiddleDown:
 		m.Button = uv.MouseMiddle
-		p.emu.SendMouse(uv.MouseClickEvent(m))
+		p.mouse(uv.MouseClickEvent(m))
 	case tview.MouseRightDown:
 		m.Button = uv.MouseRight
-		p.emu.SendMouse(uv.MouseClickEvent(m))
+		p.mouse(uv.MouseClickEvent(m))
 	case tview.MouseLeftUp:
 		m.Button = uv.MouseLeft
-		p.emu.SendMouse(uv.MouseReleaseEvent(m))
+		p.mouse(uv.MouseReleaseEvent(m))
 	case tview.MouseMiddleUp:
 		m.Button = uv.MouseMiddle
-		p.emu.SendMouse(uv.MouseReleaseEvent(m))
+		p.mouse(uv.MouseReleaseEvent(m))
 	case tview.MouseRightUp:
 		m.Button = uv.MouseRight
-		p.emu.SendMouse(uv.MouseReleaseEvent(m))
+		p.mouse(uv.MouseReleaseEvent(m))
 	case tview.MouseScrollUp:
 		m.Button = uv.MouseWheelUp
-		p.emu.SendMouse(uv.MouseWheelEvent(m))
+		p.mouse(uv.MouseWheelEvent(m))
 	case tview.MouseScrollDown:
 		m.Button = uv.MouseWheelDown
-		p.emu.SendMouse(uv.MouseWheelEvent(m))
+		p.mouse(uv.MouseWheelEvent(m))
 	case tview.MouseMove:
 		if modes&(mouseButtonEvent|mouseAnyEvent) == 0 {
 			return true
@@ -644,11 +667,30 @@ func (p *Pane) sendMouse(action tview.MouseAction, ev *tcell.EventMouse, col, ro
 		case modes&mouseAnyEvent == 0:
 			return true // plain motion only in any-event mode
 		}
-		p.emu.SendMouse(uv.MouseMotionEvent(m))
+		p.mouse(uv.MouseMotionEvent(m))
 	case tview.MouseLeftClick, tview.MouseMiddleClick, tview.MouseRightClick, tview.MouseLeftDoubleClick:
 		// Already sent as down/up.
 	default:
 		return false
 	}
 	return true
+}
+
+// Locked emulator access for code outside Draw and the text helpers.
+func (p *Pane) sbLen() int {
+	p.scr.RLock()
+	defer p.scr.RUnlock()
+	return p.emu.ScrollbackLen()
+}
+
+func (p *Pane) altScreen() bool {
+	p.scr.RLock()
+	defer p.scr.RUnlock()
+	return p.emu.IsAltScreen()
+}
+
+func (p *Pane) mouse(ev uv.MouseEvent) {
+	p.scr.Lock()
+	defer p.scr.Unlock()
+	p.emu.SendMouse(ev)
 }

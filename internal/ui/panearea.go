@@ -194,6 +194,7 @@ func (a *paneArea) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, fun
 		case a.drag != nil:
 			if action == tview.MouseLeftUp {
 				a.drag = nil
+				a.w.saveLayout()
 				return true, nil
 			}
 			if action == tview.MouseMove {

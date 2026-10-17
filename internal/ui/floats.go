@@ -170,6 +170,7 @@ func (l *floatLayer) MouseHandler() func(tview.MouseAction, *tcell.EventMouse, f
 		case l.drag != nil:
 			if action == tview.MouseLeftUp {
 				l.drag = nil
+				l.ws.saveLayout()
 				return true, nil
 			}
 			if action == tview.MouseMove {

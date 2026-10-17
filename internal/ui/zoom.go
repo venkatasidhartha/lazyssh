@@ -90,6 +90,10 @@ func (w *Workspace) renameForm(n *wsNode) {
 		if k == tcell.KeyEnter {
 			if name := strings.TrimSpace(input.GetText()); name != "" {
 				n.pane.SetLabel(name)
+				if w.sd != nil && n.sessionID != "" {
+					w.sd.Rename(n.sessionID, name)
+				}
+				w.saveLayout()
 			}
 		}
 		done()

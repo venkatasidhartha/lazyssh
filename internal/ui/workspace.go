@@ -2,8 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -14,7 +12,7 @@ import (
 
 	"lazyssh/internal/domain"
 	"lazyssh/internal/search"
-	"lazyssh/internal/sshx"
+	"lazyssh/internal/sessions"
 	"lazyssh/internal/store"
 	"lazyssh/internal/vterm"
 )
@@ -42,7 +40,10 @@ type wsNode struct {
 	parent *wsNode
 	server *domain.Server // nil for a local shell
 	weight int            // share of the parent split (dragging a border changes it)
-	prim   tview.Primitive
+	// sessionID is the session in the background service ("" when the
+	// session runs inside lazyssh).
+	sessionID string
+	prim      tview.Primitive
 }
 
 type Workspace struct {
@@ -74,6 +75,10 @@ type Workspace struct {
 	zoomBar  *tview.TextView
 
 	dialogButton func(id string) // buttons of the open dialog (ids m…)
+
+	sd        *sessions.Client // background session service; nil = in-process
+	restoring bool
+	saveTimer *time.Timer
 
 	floats     []*floatWin // popup windows, bottom to top
 	floatFocus *floatWin   // the popup being typed into, nil for a tile
@@ -304,6 +309,7 @@ func (w *Workspace) refresh() {
 	if p := w.activePane(); w.t.inWorkspace && p != nil && w.t.app.GetFocus() != p {
 		w.t.app.SetFocus(p)
 	}
+	w.saveLayout()
 }
 
 // activeFloat is the popup being typed into, if any.
@@ -604,38 +610,7 @@ func (w *Workspace) open(s *domain.Server, dir int) {
 	if s != nil {
 		label, target = s.Alias, s.Target()
 	}
-	label = w.uniqueLabel(label)
-	app := w.t.app
-	p := vterm.NewPane(label, func() { go app.QueueUpdateDraw(func() {}) })
-	p.OnCopy = func(text string) {
-		copyToClipboard(text)
-		w.flash(fmt.Sprintf("Copied %d characters", len([]rune(text))), "#A0FFA0")
-	}
-	p.OnPasteRequest = func() string {
-		text, _ := clipboard.ReadAll()
-		return text
-	}
-	p.OnExit = func() { go app.QueueUpdateDraw(w.fillList) }
-	p.SetFocusFunc(func() {
-		// A click on a pane (or any focus change) means "type here".
-		for _, n := range w.leaves() {
-			if n.pane == p && (w.focused != n || w.floatFocus != nil) {
-				w.focused = n
-				w.floatFocus = nil
-				w.mode = modeTerminal
-				w.fillList()
-				w.styleBorders()
-				w.updateStatus()
-			}
-		}
-		for _, f := range w.floats {
-			if f.node.pane == p && w.floatFocus != f {
-				w.focusFloat(f)
-			}
-		}
-	})
-	p.SetTitleAlign(tview.AlignLeft)
-	leaf := &wsNode{pane: p, target: target, server: s}
+	leaf := w.newNode(w.uniqueLabel(label), target, s)
 	w.mode = modeTerminal
 	if dir == dirFloat {
 		w.addFloat(leaf)
@@ -644,19 +619,7 @@ func (w *Workspace) open(s *domain.Server, dir int) {
 		w.insert(leaf, dir)
 		w.refresh()
 	}
-
-	if s == nil {
-		shell := os.Getenv("SHELL")
-		if shell == "" {
-			shell = "/bin/sh"
-		}
-		if err := vterm.StartCommand(p, exec.Command(shell)); err != nil {
-			p.Message("\x1b[38;5;203m✗ " + err.Error() + "\x1b[0m\r\n")
-			p.Exited()
-		}
-		return
-	}
-	go w.connect(p, *s)
+	w.startSession(leaf)
 }
 
 // uniqueLabel numbers repeated names: local, local 2, local 3…
@@ -785,44 +748,6 @@ func abs(n int) int {
 // connect logs in to s inside p. Servers lazyssh can log in to on its own
 // (saved password, managed or user key) use the built-in client; anything
 // else runs the system ssh in the pane so it can prompt.
-func (w *Workspace) connect(p *vterm.Pane, s domain.Server) {
-	p.Message(fmt.Sprintf("\x1b[38;5;81m›\x1b[0m Connecting to %s…\r\n", s.Target()))
-	c := *w.t.connector
-	c.Out = p.Output()
-	c.PromptPassword = nil
-	touch := func() {
-		_, _ = w.t.store.Mutate(s.ID, func(x *domain.Server) {
-			x.LastSeen = time.Now()
-			x.SSHCount++
-		})
-	}
-	if s.Password != "" || s.KeyPath != "" || s.KeyState == domain.KeyInstalled {
-		client, err := c.DialAuto(s)
-		if err == nil {
-			if err = vterm.StartSSH(p, client); err == nil {
-				touch()
-				return
-			}
-		}
-		p.Message(fmt.Sprintf("\x1b[38;5;214m!\x1b[0m %v\r\n", err))
-	}
-	if _, err := exec.LookPath("ssh"); err != nil {
-		p.Message("\x1b[38;5;203m✗ no ssh client installed\x1b[0m\r\n")
-		p.Exited()
-		return
-	}
-	key := s.KeyPath
-	if key == "" && s.KeyState == domain.KeyInstalled {
-		key = c.Key.Path
-	}
-	if err := vterm.StartCommand(p, exec.Command("ssh", sshx.SSHArgs(s, key)...)); err != nil {
-		p.Message("\x1b[38;5;203m✗ " + err.Error() + "\x1b[0m\r\n")
-		p.Exited()
-		return
-	}
-	touch()
-}
-
 // ---------------------------------------------------------------------------
 // Actions (buttons, control keys and the action finder share these)
 // ---------------------------------------------------------------------------
@@ -1164,6 +1089,12 @@ func (w *Workspace) showHelp() {
   ★ Commands     your saved commands: ▶ type · ↵ run · + new · ✎ edit ·
                  ✕ remove. + Add saves one; a chip types it in one click
 
+[#55D7FF::b]Sessions stay alive[-:-:-]
+  Quitting lazyssh keeps every session running in the background (servers
+  stay connected, programs keep running). Open lazyssh again and the same
+  panes, popups, names and sizes come back. "End sessions and quit" in the
+  quit dialog, or "lazyssh sessions stop", ends them all.
+
 [#55D7FF::b]Mouse — works like a normal terminal[-:-:-]
   Click a session to type in it · wheel scrolls back · drag selects and
   copies · double-click selects a word · right-click pastes ·
@@ -1188,7 +1119,7 @@ func (w *Workspace) showHelp() {
 		}
 		return a, ev
 	})
-	w.overlay(tv, 80, 36, tv)
+	w.overlay(tv, 80, 42, tv)
 }
 
 type pickItem struct{ main, secondary, search string }

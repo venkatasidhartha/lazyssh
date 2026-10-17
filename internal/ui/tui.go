@@ -10,6 +10,7 @@ import (
 	"github.com/rivo/tview"
 
 	"lazyssh/internal/domain"
+	"lazyssh/internal/sessions"
 	"lazyssh/internal/sshx"
 	"lazyssh/internal/store"
 )
@@ -41,6 +42,11 @@ type App struct {
 	inWorkspace bool       // the workspace is on screen
 	// A server form opened from the workspace goes back there when done.
 	backToWorkspace bool
+
+	// Sessions connects to the background session service, which keeps
+	// sessions running after lazyssh closes. nil runs them in-process.
+	Sessions    func() (*sessions.Client, error)
+	sessionsErr error
 }
 
 func New(st *store.Store, conn *sshx.Connector, version string) *App {
@@ -63,6 +69,13 @@ func (t *App) Run() error {
 	t.buildLayout()
 	t.root.SetInputCapture(t.handleGlobalKeys)
 	t.workspace = newWorkspace(t)
+	if t.Sessions != nil {
+		if c, err := t.Sessions(); err == nil {
+			t.workspace.sd = c
+		} else {
+			t.sessionsErr = err
+		}
+	}
 	t.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
 		if t.inWorkspace {
 			if ev = t.workspace.handleKey(ev); ev == nil {
@@ -81,10 +94,17 @@ func (t *App) Run() error {
 	})
 	t.refreshServerList()
 	t.app.SetRoot(t.root, true).SetFocus(t.serverList)
-	// Without saved servers there is nothing to manage yet: start in a
+	// Sessions from last time come back as they were. Without them and
+	// without saved servers there is nothing to manage yet: start in a
 	// local terminal (splits, popups and saved commands all work there).
-	if len(t.store.List()) == 0 {
+	if t.workspace.restoreLayout() > 0 {
+		t.workspace.show()
+		t.workspace.flash("Welcome back — your sessions are as you left them", "#A0FFA0")
+	} else if len(t.store.List()) == 0 {
 		t.openTerminal()
+	}
+	if t.sessionsErr != nil {
+		t.workspace.flash("Sessions will close with lazyssh: "+t.sessionsErr.Error(), "#FFD75F")
 	}
 	stop := make(chan struct{})
 	defer close(stop)

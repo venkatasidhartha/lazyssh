@@ -127,6 +127,31 @@ func (t *App) handleQuit() {
 		t.app.Stop()
 		return
 	}
+	back := func() {
+		if t.inWorkspace {
+			t.workspace.restore()
+			return
+		}
+		t.returnToMain()
+	}
+	if t.workspace.sd != nil {
+		modal := tview.NewModal().
+			SetText(fmt.Sprintf("Your %d session%s keep running in the background.\n\nNext time you open lazyssh they come back exactly as they are now.", n, plural(n))).
+			AddButtons([]string{"Quit — keep sessions", "End sessions and quit", "Cancel"}).
+			SetDoneFunc(func(i int, _ string) {
+				switch i {
+				case 0:
+					t.app.Stop()
+				case 1:
+					t.endAllSessions()
+					t.app.Stop()
+				default:
+					back()
+				}
+			})
+		t.app.SetRoot(modal, true)
+		return
+	}
 	modal := tview.NewModal().
 		SetText(fmt.Sprintf("%d workspace session%s still running.\n\nQuit and close them?", n, plural(n))).
 		AddButtons([]string{"Cancel", "Quit"}).
@@ -140,13 +165,32 @@ func (t *App) handleQuit() {
 	t.app.SetRoot(modal, true)
 }
 
+// closeAllPanes runs when lazyssh exits. Sessions in the background
+// service keep running; the others end.
 func (t *App) closeAllPanes() {
+	ws := t.workspace
+	if ws.sd != nil {
+		if ws.saveTimer != nil {
+			ws.saveTimer.Stop()
+		}
+		ws.saveLayoutNow()
+		ws.sd.Close()
+		return
+	}
+	t.endAllSessions()
+}
+
+// endAllSessions ends every workspace session.
+func (t *App) endAllSessions() {
 	for _, n := range t.workspace.leaves() {
 		n.pane.Close()
 	}
 	for _, f := range t.workspace.floats {
 		f.node.pane.Close()
 	}
+	// Nothing to bring back next time.
+	t.workspace.root, t.workspace.focused, t.workspace.floats = nil, nil, nil
+	t.workspace.floatFocus, t.workspace.zoomed = nil, nil
 }
 
 func (t *App) moveSelection(dir int) {

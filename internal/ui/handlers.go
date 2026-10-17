@@ -29,6 +29,8 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		t.handleOpenWorkspace(false)
 	case 'o':
 		t.handleOpenWorkspace(true)
+	case 'l':
+		t.openTerminal()
 	case '/':
 		t.handleSearchFocus()
 	case 'a':
@@ -90,6 +92,15 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 		return event
 	}
 	return nil
+}
+
+// openTerminal shows the workspace, opening a local shell if it is empty.
+func (t *App) openTerminal() {
+	ws := t.workspace
+	ws.show()
+	if ws.PaneCount()+len(ws.floats) == 0 {
+		ws.open(nil, -1)
+	}
 }
 
 // handleOpenWorkspace shows the split-pane workspace. With newPane (or an
@@ -186,7 +197,7 @@ func (t *App) refreshServerList() {
 	t.serverList.UpdateServers(servers, selectID)
 	switch {
 	case len(all) == 0:
-		t.details.ShowEmpty("\n  [::b]Welcome to lazyssh![-]\n\n  No servers yet.\n\n  Press [#55D7FF::b]a[-] to add your first server.\n\n  Enter the IP, user and password once —\n  lazyssh logs in with the password, installs\n  an SSH key and uses the key from then on.\n  Servers that refuse keys keep using the\n  saved (encrypted) password automatically.")
+		t.details.ShowEmpty("\n  [::b]Welcome to lazyssh![-]\n\n  No servers yet.\n\n  Press [#55D7FF::b]a[-] to add your first server,\n  or [#55D7FF::b]l[-] / [#55D7FF::b]▶ Terminal[-] for a local terminal\n  with split panes and popups.\n\n  Enter the IP, user and password once —\n  lazyssh logs in with the password, installs\n  an SSH key and uses the key from then on.\n  Servers that refuse keys keep using the\n  saved (encrypted) password automatically.")
 	case len(servers) == 0:
 		t.details.ShowEmpty("No servers match the current filter.")
 	}
@@ -489,6 +500,12 @@ func (t *App) showPortForwardForm(s domain.Server) {
 }
 
 func (t *App) returnToMain() {
+	if t.backToWorkspace {
+		t.backToWorkspace = false
+		t.refreshServerList()
+		t.workspace.show()
+		return
+	}
 	t.app.SetRoot(t.root, true)
 	t.app.SetFocus(t.serverList)
 }

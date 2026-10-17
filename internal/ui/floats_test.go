@@ -61,8 +61,6 @@ func TestWorkspacePopups(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- app.Run() }()
 	sim.SetSize(140, 40)
-	waitFor(t, app, sim, "Workspace")
-	typeText(sim, "w")
 	waitFor(t, app, sim, "$ ")
 
 	type geo struct{ x, y, w, h, n, tiles int }

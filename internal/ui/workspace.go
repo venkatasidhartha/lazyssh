@@ -64,9 +64,19 @@ type Workspace struct {
 	commands []store.Command
 	syncing  bool // list is being refilled; ignore its change events
 
+	// What each sidebar row does: hover/arrow keys only switch sessions
+	// (onChange); a click or Enter runs onPick.
+	listRows []listRow
+	empty    *tview.TextView // shown when no session is open
+
 	floats     []*floatWin // popup windows, bottom to top
 	floatFocus *floatWin   // the popup being typed into, nil for a tile
 	layer      *floatLayer
+}
+
+type listRow struct {
+	onChange func()
+	onPick   func()
 }
 
 // dirFloat as an open direction means "in a popup window".
@@ -80,11 +90,41 @@ func newWorkspace(t *App) *Workspace {
 		SetHighlightFullLine(true).SetSelectedBackgroundColor(tcell.Color238).SetSelectedTextColor(tcell.Color255)
 	w.list.SetBorder(true).SetTitle(" Sessions ").SetBorderColor(tcell.Color238)
 	w.list.SetChangedFunc(func(i int, _, _ string, _ rune) {
-		if !w.syncing {
-			w.listPick(i)
+		if !w.syncing && i < len(w.listRows) && w.listRows[i].onChange != nil {
+			w.listRows[i].onChange()
 		}
 	})
-	w.list.SetSelectedFunc(func(i int, _, _ string, _ rune) { w.listPick(i) })
+	// tview turns two quick clicks into a double-click even on different
+	// rows. A second click on another row is a click; on the same row it
+	// is ignored, so one server is not opened twice.
+	lastClickY := -1
+	w.list.SetMouseCapture(func(a tview.MouseAction, ev *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		_, y := ev.Position()
+		switch a {
+		case tview.MouseLeftClick:
+			lastClickY = y
+		case tview.MouseLeftDoubleClick:
+			if y == lastClickY {
+				return tview.MouseConsumed, nil
+			}
+			lastClickY = y
+			a = tview.MouseLeftClick
+		}
+		return a, ev
+	})
+	w.list.SetSelectedFunc(func(i int, _, _ string, _ rune) {
+		if i < len(w.listRows) && w.listRows[i].onPick != nil {
+			w.listRows[i].onPick()
+		}
+	})
+	w.empty = w.buttonBar()
+	w.empty.SetTextAlign(tview.AlignCenter).SetWrap(true)
+	w.empty.SetBackgroundColor(tcell.ColorDefault)
+	w.empty.SetText("\n\n\n[::b]No session open[::-]\n\n" +
+		btn("local", "▶ Open a local terminal", "#55D7FF") + "\n\n" +
+		btn("new", "+ Connect to a server", "#87AFD7") + "\n\n" +
+		btn("addserver", "+ Add a server", "#87D7AF") + "\n\n" +
+		"[#8a8a8a]Split panes, popups and saved commands work with local terminals too.[-]")
 	w.panes = newPaneArea(w)
 	w.body = tview.NewFlex()
 	w.status = w.buttonBar()
@@ -236,6 +276,8 @@ func (w *Workspace) build(n *wsNode) tview.Primitive {
 func (w *Workspace) refresh() {
 	w.panes.Clear()
 	switch {
+	case w.root == nil && len(w.floats) == 0:
+		w.panes.AddItem(w.empty, 0, 1, false)
 	case w.root == nil:
 	case w.tabs && w.focused != nil:
 		w.panes.AddItem(w.focused.pane, 0, 1, true)
@@ -339,11 +381,6 @@ func (w *Workspace) closeFloat(f *floatWin) {
 	f.node.pane.Close()
 	w.removeFloat(f)
 	w.mode = modeTerminal
-	if w.root == nil && len(w.floats) == 0 {
-		w.refresh()
-		w.hide()
-		return
-	}
 	w.refresh()
 }
 
@@ -381,18 +418,24 @@ func (w *Workspace) fillList() {
 	w.syncing = true
 	defer func() { w.syncing = false }()
 	w.list.Clear()
+	w.listRows = w.listRows[:0]
+	add := func(main, sec string, row listRow) {
+		w.list.AddItem(main, sec, 0, nil)
+		w.listRows = append(w.listRows, row)
+	}
 	cur := 0
 	for i, n := range w.leaves() {
 		dot := "[#5FD75F]●[-]"
 		if n.pane.IsExited() {
 			dot = "[#6C6C6C]○[-]"
 		}
-		w.list.AddItem(fmt.Sprintf("%s %d %s", dot, i+1, tview.Escape(n.pane.Label())), "    "+tview.Escape(n.target), 0, nil)
-		if n == w.focused {
-			cur = i
+		focus := func() { w.focus(n) }
+		if n == w.focused && w.activeFloat() == nil {
+			cur = len(w.listRows)
 		}
+		add(fmt.Sprintf("%s %d %s", dot, i+1, tview.Escape(n.pane.Label())), "    "+tview.Escape(n.target), listRow{focus, focus})
 	}
-	for i, f := range w.floats {
+	for _, f := range w.floats {
 		dot := "[#D7AFFF]❐[-]"
 		if f.node.pane.IsExited() {
 			dot = "[#6C6C6C]○[-]"
@@ -401,25 +444,31 @@ func (w *Workspace) fillList() {
 		if f.minimized {
 			sec = "    minimized · " + tview.Escape(f.node.target)
 		}
-		w.list.AddItem(fmt.Sprintf("%s %s", dot, tview.Escape(f.node.pane.Label())), sec, 0, nil)
 		if f == w.activeFloat() {
-			cur = w.PaneCount() + i
+			cur = len(w.listRows)
 		}
+		focus := func() { w.focusFloat(f) }
+		add(fmt.Sprintf("%s %s", dot, tview.Escape(f.node.pane.Label())), sec, listRow{focus, focus})
 	}
-	w.list.AddItem("[#55D7FF]+ New session[-]", "", 0, nil)
+	add("[#55D7FF]▶ Local terminal[-]", "", listRow{onPick: func() { w.open(nil, -1) }})
+
+	// The saved servers: one click opens a session next to the current one.
+	add("[#8a8a8a::b]─── Servers ───[-:-:-]", "    [#8a8a8a]☰ manage all[-]", listRow{onPick: w.hide})
+	servers := w.t.store.List()
+	sortServers(servers, SortByLastSeenDesc)
+	for _, s := range servers {
+		add("[#87AFD7]⇢[-] "+tview.Escape(s.Alias), "    "+tview.Escape(s.Target()), listRow{onPick: func() { w.open(&s, -1) }})
+	}
+	add("[#87D7AF]+ Add server[-]", "", listRow{onPick: w.addServer})
 	w.list.SetCurrentItem(cur)
 }
 
-func (w *Workspace) listPick(i int) {
-	leaves := w.leaves()
-	switch {
-	case i < len(leaves):
-		w.focus(leaves[i])
-	case i < len(leaves)+len(w.floats):
-		w.focusFloat(w.floats[i-len(leaves)])
-	default:
-		w.newSessionPicker(-1)
-	}
+// addServer opens the server form and comes back here when it closes.
+func (w *Workspace) addServer() {
+	w.mode = modeTerminal
+	w.t.inWorkspace = false
+	w.t.backToWorkspace = true
+	w.t.showServerForm(nil)
 }
 
 func (w *Workspace) focus(n *wsNode) {
@@ -599,12 +648,10 @@ func (w *Workspace) closeFocused() {
 	n.pane.Close()
 	w.detach(n)
 	w.mode = modeTerminal
-	if w.root == nil && len(w.floats) == 0 {
-		w.refresh()
-		w.hide()
-		return
-	}
 	w.refresh()
+	if w.activePane() == nil {
+		w.t.app.SetFocus(w.empty)
+	}
 }
 
 // detach takes n out of the tiled layout and focuses a neighbour.
@@ -744,6 +791,10 @@ func (w *Workspace) button(id string) {
 		w.newSessionPicker(tview.FlexColumn)
 	case id == "splith":
 		w.newSessionPicker(tview.FlexRow)
+	case id == "local":
+		w.open(nil, -1)
+	case id == "addserver":
+		w.addServer()
 	case id == "popup":
 		w.newSessionPicker(dirFloat)
 	case strings.HasPrefix(id, "float"):
@@ -801,6 +852,10 @@ func (w *Workspace) paneButton(n *wsNode, id string) {
 // on screen. It returns nil for keys it consumed.
 func (w *Workspace) handleKey(ev *tcell.EventKey) *tcell.EventKey {
 	p, onPane := w.t.app.GetFocus().(*vterm.Pane)
+	if w.t.app.GetFocus() == w.empty && ev.Key() == tcell.KeyEnter {
+		w.open(nil, -1)
+		return nil
+	}
 	if !onPane {
 		return ev // a picker or form is open
 	}

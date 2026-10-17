@@ -21,17 +21,33 @@ const Author = "Venkata Sidhartha K"
 
 type AppHeader struct {
 	*tview.Flex
-	right *tview.TextView
-	count func() int
+	right      *tview.TextView
+	count      func() int
+	onTerminal func()
 }
+
+// OnTerminal is called when the "Terminal" button is clicked.
+func (h *AppHeader) OnTerminal(f func()) *AppHeader { h.onTerminal = f; return h }
 
 func NewAppHeader(version string, count func() int) *AppHeader {
 	bg := tcell.Color234
 	h := &AppHeader{Flex: tview.NewFlex(), count: count}
 
-	left := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignLeft)
+	left := tview.NewTextView().SetDynamicColors(true).SetRegions(true).SetTextAlign(tview.AlignLeft)
 	left.SetBackgroundColor(bg)
-	left.SetText("🚀 [#FFFFFF::b]lazy[-][#55D7FF::b]ssh[-]")
+	left.SetText(`🚀 [#FFFFFF::b]lazy[-][#55D7FF::b]ssh[-:-:-]  ["term"][black:#55D7FF] ▶ Terminal [-:-][""]`)
+	left.SetMouseCapture(func(a tview.MouseAction, ev *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
+		if a == tview.MouseLeftDoubleClick {
+			a = tview.MouseLeftClick
+		}
+		return a, ev
+	})
+	left.SetHighlightedFunc(func(added, _, _ []string) {
+		if len(added) > 0 && h.onTerminal != nil {
+			left.Highlight()
+			h.onTerminal()
+		}
+	})
 
 	center := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter)
 	center.SetBackgroundColor(bg)
@@ -73,7 +89,7 @@ func makeTag(text, bg string) string {
 // ---------------------------------------------------------------------------
 
 func DefaultStatusText() string {
-	return "[white]↑↓[-] Navigate  • [white]Enter[-] SSH  • [white]w[-] Workspace  • [white]o[-] Open in pane  • [white]f[-] Forward  • [white]x[-] Stop Forward  • [white]c[-] Copy SSH  • [white]a[-] Add  • [white]e[-] Edit  • [white]g[-] Ping  • [white]d[-] Delete  • [white]p[-] Pin/Unpin  • [white]/[-] Search  • [white]q[-] Quit"
+	return "[white]↑↓[-] Navigate  • [white]Enter[-] SSH  • [white]l[-] Local terminal  • [white]w[-] Workspace  • [white]o[-] Open in pane  • [white]f[-] Forward  • [white]x[-] Stop Forward  • [white]c[-] Copy SSH  • [white]a[-] Add  • [white]e[-] Edit  • [white]g[-] Ping  • [white]d[-] Delete  • [white]p[-] Pin/Unpin  • [white]/[-] Search  • [white]q[-] Quit"
 }
 
 func NewStatusBar() *tview.TextView {

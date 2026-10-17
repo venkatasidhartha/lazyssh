@@ -7,6 +7,7 @@ import (
 
 	"github.com/gdamore/tcell/v2"
 
+	"lazyssh/internal/domain"
 	"lazyssh/internal/sshx"
 	"lazyssh/internal/store"
 )
@@ -79,9 +80,7 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 	go func() { done <- app.Run() }()
 	sim.SetSize(140, 40)
 
-	waitFor(t, app, sim, "Workspace")
-	// No servers: 'w' opens a local shell.
-	typeText(sim, "w")
+	// No servers: lazyssh starts in a local terminal.
 	waitFor(t, app, sim, "greet") // commands bar
 	waitFor(t, app, sim, "$ ")
 	typeText(sim, "echo pane-one-$((40+2))")
@@ -199,7 +198,7 @@ func TestWorkspaceLocalPanes(t *testing.T) {
 
 	// Back to the server list and in again: sessions are still there.
 	clickText(t, app, sim, "☰ Server list")
-	waitFor(t, app, sim, "Servers")
+	waitFor(t, app, sim, "No servers yet")
 	typeText(sim, "w")
 	waitFor(t, app, sim, "drag-me-please")
 
@@ -271,4 +270,81 @@ func clickText(t *testing.T, a *App, s tcell.SimulationScreen, text string) {
 	time.Sleep(20 * time.Millisecond)
 	s.InjectMouse(x+1, y, tcell.ButtonNone, tcell.ModNone)
 	time.Sleep(100 * time.Millisecond)
+}
+
+func startApp(t *testing.T, servers ...domain.Server) (*App, tcell.SimulationScreen, chan error) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("SHELL", "/bin/sh")
+	t.Setenv("PS1", "$ ")
+	st, err := store.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range servers {
+		if _, err := st.Add(s); err != nil {
+			t.Fatal(err)
+		}
+	}
+	key, err := sshx.LoadOrCreateManagedKey(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sim := tcell.NewSimulationScreen("UTF-8")
+	app := New(st, &sshx.Connector{Key: key}, "test")
+	app.app.SetScreen(sim)
+	done := make(chan error, 1)
+	go func() { done <- app.Run() }()
+	sim.SetSize(140, 40)
+	return app, sim, done
+}
+
+// Without any server the terminal features work on their own, and closing
+// the last session leaves you in the workspace, not in an empty manager.
+func TestWorkspaceWithoutServers(t *testing.T) {
+	app, sim, done := startApp(t)
+	waitFor(t, app, sim, "$ ")
+	waitFor(t, app, sim, "▶ Local terminal")
+	waitFor(t, app, sim, "+ Add server")
+
+	typeText(sim, "exit")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitFor(t, app, sim, "session ended")
+	sim.InjectKey(tcell.KeyEnter, 0, tcell.ModNone)
+	waitFor(t, app, sim, "No session open")
+	clickText(t, app, sim, "▶ Open a local terminal")
+	waitFor(t, app, sim, "$ ")
+	if n := paneCount(app); n != 1 {
+		t.Fatalf("panes = %d", n)
+	}
+
+	// + Add server opens the form; cancelling comes back to the workspace.
+	clickText(t, app, sim, "+ Add server")
+	waitFor(t, app, sim, "Alias")
+	sim.InjectKey(tcell.KeyEsc, 0, tcell.ModNone)
+	waitFor(t, app, sim, "▶ Local terminal")
+	waitFor(t, app, sim, "$ ")
+
+	app.app.Stop()
+	<-done
+}
+
+// With saved servers lazyssh starts in the manager; ▶ Terminal opens a
+// local shell and the servers are one click away in the session list.
+func TestTerminalButtonWithServers(t *testing.T) {
+	app, sim, done := startApp(t, domain.Server{Alias: "web-1", Host: "10.0.0.9", User: "deploy"})
+	waitFor(t, app, sim, "web-1")
+	var inWS bool
+	app.app.QueueUpdate(func() { inWS = app.inWorkspace })
+	if inWS {
+		t.Fatal("started in the workspace although servers exist")
+	}
+	clickText(t, app, sim, "▶ Terminal")
+	waitFor(t, app, sim, "$ ")
+	waitFor(t, app, sim, "⇢ web-1")
+	if n := paneCount(app); n != 1 {
+		t.Fatalf("panes = %d", n)
+	}
+	app.app.Stop()
+	<-done
 }

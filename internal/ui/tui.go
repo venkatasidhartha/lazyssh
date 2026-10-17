@@ -39,6 +39,8 @@ type App struct {
 
 	workspace   *Workspace // split-pane terminal sessions
 	inWorkspace bool       // the workspace is on screen
+	// A server form opened from the workspace goes back there when done.
+	backToWorkspace bool
 }
 
 func New(st *store.Store, conn *sshx.Connector, version string) *App {
@@ -69,6 +71,11 @@ func (t *App) Run() error {
 	})
 	t.refreshServerList()
 	t.app.SetRoot(t.root, true).SetFocus(t.serverList)
+	// Without saved servers there is nothing to manage yet: start in a
+	// local terminal (splits, popups and saved commands all work there).
+	if len(t.store.List()) == 0 {
+		t.openTerminal()
+	}
 	stop := make(chan struct{})
 	defer close(stop)
 	go t.tick(stop)
@@ -87,7 +94,8 @@ func (t *App) initializeTheme() {
 }
 
 func (t *App) buildComponents() {
-	t.header = NewAppHeader(t.version, t.serverCount)
+	t.header = NewAppHeader(t.version, t.serverCount).
+		OnTerminal(func() { go t.app.QueueUpdateDraw(t.openTerminal) })
 	t.searchBar = NewSearchBar().
 		OnSearch(func(string) { t.refreshServerList() }).
 		OnEscape(t.blurSearchBar).

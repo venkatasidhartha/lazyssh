@@ -125,6 +125,15 @@ func (s *Server) Idle(d time.Duration) bool {
 	return time.Since(s.lastBusy) > d
 }
 
+// Disconnect drops every connected window (as when the process dies).
+func (s *Server) Disconnect() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for p := range s.clients {
+		p.conn.Close()
+	}
+}
+
 // Shutdown ends every session.
 func (s *Server) Shutdown() {
 	s.mu.Lock()
@@ -236,8 +245,9 @@ func (s *Server) open(spec Spec, cols, rows int) *session {
 	s.mu.Lock()
 	s.sessions[se.id] = se
 	s.mu.Unlock()
+	cols0, rows0 := se.cols, se.rows // read before another goroutine can resize
 	go func() {
-		proc, err := Start(s.st, s.conn, spec, se.cols, se.rows, se, se.exit)
+		proc, err := Start(s.st, s.conn, spec, cols0, rows0, se, se.exit)
 		if err != nil {
 			fmt.Fprintf(se, "\x1b[38;5;203m✗ %v\x1b[0m\r\n", err)
 			se.exit()
@@ -273,6 +283,7 @@ func (s *Server) get(id string) *session {
 // peer is one connected lazyssh window. Messages to it are queued so a slow
 // window never holds up a session.
 type peer struct {
+	conn net.Conn
 	out  chan Msg
 	done chan struct{}
 	once sync.Once
@@ -291,7 +302,7 @@ func (p *peer) close() { p.once.Do(func() { close(p.done) }) }
 
 func (s *Server) handle(c net.Conn) {
 	defer c.Close()
-	p := &peer{out: make(chan Msg, 4096), done: make(chan struct{})}
+	p := &peer{conn: c, out: make(chan Msg, 4096), done: make(chan struct{})}
 	s.mu.Lock()
 	s.clients[p] = true
 	s.mu.Unlock()
@@ -348,8 +359,11 @@ func (s *Server) handle(c net.Conn) {
 		case "attach":
 			se := s.get(m.ID)
 			if se == nil {
-				reply.Err = "session not found"
-				break
+				// Gone (closed elsewhere, or the service restarted): say so
+				// and end it, the window would otherwise wait forever.
+				p.send(Msg{Kind: "output", ID: m.ID, Data: []byte("\x1b[38;5;214m!\x1b[0m this session no longer exists\r\n")})
+				p.send(Msg{Kind: "exited", ID: m.ID})
+				continue
 			}
 			se.mu.Lock()
 			// Everything so far, then live output, in order.

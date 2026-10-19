@@ -39,6 +39,7 @@ type Pane struct {
 	cols   int
 	rows   int
 	exited bool
+	closed bool // Close was called: a later Attach ends its program
 
 	// Viewport and selection, used on the UI goroutine only. Lines are
 	// absolute: 0 is the oldest scrollback line, sbLen is the first
@@ -181,12 +182,21 @@ func (p *Pane) Size() (cols, rows int) {
 }
 
 // Attach connects the pane to a running program.
+// A program that finishes starting after the pane was closed is ended
+// right away, so nothing is left running.
 func (p *Pane) Attach(be Backend) {
 	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		_ = be.Close()
+		return
+	}
 	p.be = be
 	cols, rows := p.cols, p.rows
 	p.mu.Unlock()
-	_ = be.Resize(cols, rows)
+	if cols > 0 && rows > 0 {
+		_ = be.Resize(cols, rows)
+	}
 }
 
 // Output is where a backend writes the program's output.
@@ -240,6 +250,7 @@ func (p *Pane) Close() {
 	p.mu.Lock()
 	be := p.be
 	p.be = nil
+	p.closed = true
 	p.mu.Unlock()
 	p.inMu.Lock()
 	p.inClosed = true

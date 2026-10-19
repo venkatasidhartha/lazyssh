@@ -78,6 +78,13 @@ func Ensure(dir, exe string) (*Client, error) {
 	return nil, fmt.Errorf("session service did not start: %v", last)
 }
 
+// Lost reports whether the connection to the service is gone.
+func (c *Client) Lost() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.lost
+}
+
 // Close disconnects; the sessions keep running.
 func (c *Client) Close() { c.conn.Close() }
 

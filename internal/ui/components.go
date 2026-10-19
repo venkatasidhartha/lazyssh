@@ -196,6 +196,18 @@ func NewServerList() *ServerList {
 		}
 	})
 	sl.Table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		// With only the header row, tview's table loops forever looking
+		// for a selectable row: there is nothing to move to anyway.
+		if len(sl.servers) == 0 {
+			switch event.Key() {
+			case tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd, tcell.KeyPgUp, tcell.KeyPgDn:
+				return nil
+			case tcell.KeyRune:
+				if strings.ContainsRune("jkgGhl", event.Rune()) {
+					return nil
+				}
+			}
+		}
 		switch event.Key() {
 		case tcell.KeyLeft, tcell.KeyRight, tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyESC:
 			if sl.onReturnToSearch != nil {

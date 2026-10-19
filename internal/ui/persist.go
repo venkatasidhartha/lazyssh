@@ -79,9 +79,28 @@ func (w *Workspace) startSession(n *wsNode) {
 		p.Message("\x1b[38;5;203m✗ " + err.Error() + "\x1b[0m\r\n")
 		p.Exited()
 	}
-	if sd := w.sd; sd != nil {
-		spec := n.spec()
-		go func() {
+	spec := n.spec()
+	sd, reconnect := w.sd, w.t.Sessions
+	go func() {
+		// The service may have stopped (crashed, or "lazyssh sessions
+		// stop"): start it again, or run this session inside lazyssh.
+		if sd != nil && sd.Lost() {
+			sd = nil
+			if reconnect != nil {
+				if c, err := reconnect(); err == nil {
+					sd = c
+				}
+			}
+			w.t.app.QueueUpdate(func() {
+				if w.sd == nil || w.sd.Lost() {
+					w.sd = sd
+				}
+				if sd == nil {
+					w.flash("The background session service is not available: this session closes with lazyssh", "#FFD75F")
+				}
+			})
+		}
+		if sd != nil {
 			id, err := sd.Open(spec, 80, 24) // the pane sends its real size when drawn
 			if err != nil {
 				fail(err)
@@ -92,11 +111,8 @@ func (w *Workspace) startSession(n *wsNode) {
 				w.saveLayout()
 			})
 			p.Attach(sd.Attach(id, p.Output(), p.Exited))
-		}()
-		return
-	}
-	spec := n.spec()
-	go func() {
+			return
+		}
 		cols, rows := p.Size()
 		proc, err := sessions.Start(w.t.store, *w.t.connector, spec, max(cols, 80), max(rows, 24), p.Output(), p.Exited)
 		if err != nil {

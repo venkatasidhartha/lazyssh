@@ -24,13 +24,7 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	}
 	switch event.Rune() {
 	case 'q':
-		t.handleQuit()
-	case 'w':
-		t.handleOpenWorkspace(false)
-	case 'o':
-		t.handleOpenWorkspace(true)
-	case 'l':
-		t.openTerminal()
+		t.app.Stop()
 	case '/':
 		t.handleSearchFocus()
 	case 'a':
@@ -94,117 +88,6 @@ func (t *App) handleGlobalKeys(event *tcell.EventKey) *tcell.EventKey {
 	return nil
 }
 
-// openTerminal shows the workspace, opening a local shell if it is empty.
-func (t *App) openTerminal() {
-	ws := t.workspace
-	ws.show()
-	if ws.PaneCount()+len(ws.floats) == 0 {
-		ws.open(nil, -1)
-	}
-}
-
-// handleOpenWorkspace shows the split-pane workspace. With newPane (or an
-// empty workspace) the selected server is opened in a new pane.
-func (t *App) handleOpenWorkspace(newPane bool) {
-	ws := t.workspace
-	if ws.PaneCount()+len(ws.floats) > 0 && !newPane {
-		ws.show()
-		return
-	}
-	s, ok := t.serverList.GetSelectedServer()
-	ws.show()
-	if ok {
-		ws.open(&s, tview.FlexColumn)
-	} else {
-		ws.open(nil, tview.FlexColumn)
-	}
-}
-
-// handleQuit asks before ending running workspace sessions.
-func (t *App) handleQuit() {
-	n := t.workspace.PaneCount() + len(t.workspace.floats)
-	if n == 0 {
-		t.app.Stop()
-		return
-	}
-	back := func() {
-		if t.inWorkspace {
-			t.workspace.restore()
-			return
-		}
-		t.returnToMain()
-	}
-	if t.workspace.sd != nil {
-		modal := tview.NewModal().
-			SetText(fmt.Sprintf("Your %d session%s keep running in the background.\n\nNext time you open lazyssh they come back exactly as they are now.", n, plural(n))).
-			AddButtons([]string{"Quit — keep sessions", "End sessions and quit", "Cancel"}).
-			SetDoneFunc(func(i int, _ string) {
-				switch i {
-				case 0:
-					t.app.Stop()
-				case 1:
-					t.endAllSessions()
-					t.app.Stop()
-				default:
-					back()
-				}
-			})
-		t.showModal(modal)
-		return
-	}
-	modal := tview.NewModal().
-		SetText(fmt.Sprintf("%d workspace session%s still running.\n\nQuit and close them?", n, plural(n))).
-		AddButtons([]string{"Cancel", "Quit"}).
-		SetDoneFunc(func(i int, _ string) {
-			if i == 1 {
-				t.app.Stop()
-				return
-			}
-			t.returnToMain()
-		})
-	t.showModal(modal)
-}
-
-// showModal shows a yes/no dialog. A quick second click (tview calls it a
-// double-click, even on another spot) still presses a button.
-func (t *App) showModal(m *tview.Modal) {
-	m.SetMouseCapture(func(a tview.MouseAction, ev *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if a == tview.MouseLeftDoubleClick {
-			a = tview.MouseLeftClick
-		}
-		return a, ev
-	})
-	t.app.SetRoot(m, true)
-}
-
-// closeAllPanes runs when lazyssh exits. Sessions in the background
-// service keep running; the others end.
-func (t *App) closeAllPanes() {
-	ws := t.workspace
-	if ws.sd != nil {
-		if ws.saveTimer != nil {
-			ws.saveTimer.Stop()
-		}
-		ws.saveLayoutNow()
-		ws.sd.Close()
-		return
-	}
-	t.endAllSessions()
-}
-
-// endAllSessions ends every workspace session.
-func (t *App) endAllSessions() {
-	for _, n := range t.workspace.leaves() {
-		n.pane.Close()
-	}
-	for _, f := range t.workspace.floats {
-		f.node.pane.Close()
-	}
-	// Nothing to bring back next time.
-	t.workspace.root, t.workspace.focused, t.workspace.floats = nil, nil, nil
-	t.workspace.floatFocus, t.workspace.zoomed = nil, nil
-}
-
 func (t *App) moveSelection(dir int) {
 	n := t.serverList.GetItemCount()
 	if n == 0 {
@@ -253,7 +136,7 @@ func (t *App) refreshServerList() {
 	t.serverList.UpdateServers(servers, selectID)
 	switch {
 	case len(all) == 0:
-		t.details.ShowEmpty("\n  [::b]Welcome to lazyssh![-]\n\n  No servers yet.\n\n  Press [#55D7FF::b]a[-] to add your first server,\n  or [#55D7FF::b]l[-] / [#55D7FF::b]▶ Terminal[-] for a local terminal\n  with split panes and popups.\n\n  Enter the IP, user and password once —\n  lazyssh logs in with the password, installs\n  an SSH key and uses the key from then on.\n  Servers that refuse keys keep using the\n  saved (encrypted) password automatically.")
+		t.details.ShowEmpty("\n  [::b]Welcome to lazyssh![-]\n\n  No servers yet.\n\n  Press [#55D7FF::b]a[-] to add your first server.\n\n  Enter the IP, user and password once —\n  lazyssh logs in with the password, installs\n  an SSH key and uses the key from then on.\n  Servers that refuse keys keep using the\n  saved (encrypted) password automatically.")
 	case len(servers) == 0:
 		t.details.ShowEmpty("No servers match the current filter.")
 	}
@@ -312,8 +195,7 @@ func (t *App) handleCopyCommand() {
 	t.showStatusTemp("Copied: " + cmd)
 }
 
-// copyToClipboard is a variable so tests can keep the real clipboard alone.
-var copyToClipboard = func(text string) {
+func copyToClipboard(text string) {
 	if err := clipboard.WriteAll(text); err != nil {
 		// No xclip/xsel/wl-copy: ask the terminal to copy via OSC 52.
 		if tty, err := os.OpenFile("/dev/tty", os.O_WRONLY, 0); err == nil {
@@ -461,7 +343,7 @@ func (t *App) showDeleteConfirmModal(s domain.Server) {
 		}
 		return event
 	})
-	t.showModal(modal)
+	t.app.SetRoot(modal, true)
 }
 
 func (t *App) showEditTagsForm(s domain.Server) {
@@ -516,7 +398,7 @@ func (t *App) showPortForwardForm(s domain.Server) {
 	showErr := func(msg string) {
 		modal := tview.NewModal().SetText(msg).AddButtons([]string{"OK"}).
 			SetDoneFunc(func(int, string) { t.app.SetRoot(form, true).SetFocus(form) })
-		t.showModal(modal)
+		t.app.SetRoot(modal, true)
 	}
 	form.AddButton("Start", func() {
 		spec := sshx.ForwardSpec{Kind: sshx.ForwardKind(kinds[kind]), Bind: strings.TrimSpace(bindField.GetText())}
@@ -556,12 +438,6 @@ func (t *App) showPortForwardForm(s domain.Server) {
 }
 
 func (t *App) returnToMain() {
-	if t.backToWorkspace {
-		t.backToWorkspace = false
-		t.refreshServerList()
-		t.workspace.show()
-		return
-	}
 	t.app.SetRoot(t.root, true)
 	t.app.SetFocus(t.serverList)
 }

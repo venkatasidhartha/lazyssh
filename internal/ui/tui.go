@@ -10,7 +10,6 @@ import (
 	"github.com/rivo/tview"
 
 	"lazyssh/internal/domain"
-	"lazyssh/internal/sessions"
 	"lazyssh/internal/sshx"
 	"lazyssh/internal/store"
 )
@@ -37,16 +36,6 @@ type App struct {
 
 	suspended atomic.Bool // an SSH session owns the terminal
 	statusGen int         // only the newest status message may be cleared
-
-	workspace   *Workspace // split-pane terminal sessions
-	inWorkspace bool       // the workspace is on screen
-	// A server form opened from the workspace goes back there when done.
-	backToWorkspace bool
-
-	// Sessions connects to the background session service, which keeps
-	// sessions running after lazyssh closes. nil runs them in-process.
-	Sessions    func() (*sessions.Client, error)
-	sessionsErr error
 }
 
 func New(st *store.Store, conn *sshx.Connector, version string) *App {
@@ -62,50 +51,13 @@ func New(st *store.Store, conn *sshx.Connector, version string) *App {
 
 func (t *App) Run() error {
 	defer t.forwarder.StopAll()
-	defer t.closeAllPanes()
-	t.app.EnableMouse(true).EnablePaste(true)
+	t.app.EnableMouse(true)
 	t.initializeTheme()
 	t.buildComponents()
 	t.buildLayout()
 	t.root.SetInputCapture(t.handleGlobalKeys)
-	t.workspace = newWorkspace(t)
-	if t.Sessions != nil {
-		if c, err := t.Sessions(); err == nil {
-			t.workspace.sd = c
-		} else {
-			t.sessionsErr = err
-		}
-	}
-	t.app.SetInputCapture(func(ev *tcell.EventKey) *tcell.EventKey {
-		if t.inWorkspace {
-			if ev = t.workspace.handleKey(ev); ev == nil {
-				return nil
-			}
-		}
-		// tview quits on Ctrl+C. lazyssh never does: in a session it goes
-		// to the program, anywhere else it is ignored (q quits).
-		if ev.Key() == tcell.KeyCtrlC {
-			if !t.inWorkspace {
-				t.showStatusTempColor("Ctrl+C does not quit lazyssh — press q to quit", "#FFD75F")
-			}
-			return nil
-		}
-		return ev
-	})
 	t.refreshServerList()
 	t.app.SetRoot(t.root, true).SetFocus(t.serverList)
-	// Sessions from last time come back as they were. Without them and
-	// without saved servers there is nothing to manage yet: start in a
-	// local terminal (splits, popups and saved commands all work there).
-	if t.workspace.restoreLayout() > 0 {
-		t.workspace.show()
-		t.workspace.flash("Welcome back — your sessions are as you left them", "#A0FFA0")
-	} else if len(t.store.List()) == 0 {
-		t.openTerminal()
-	}
-	if t.sessionsErr != nil {
-		t.workspace.flash("Sessions will close with lazyssh: "+t.sessionsErr.Error(), "#FFD75F")
-	}
 	stop := make(chan struct{})
 	defer close(stop)
 	go t.tick(stop)
@@ -124,20 +76,7 @@ func (t *App) initializeTheme() {
 }
 
 func (t *App) buildComponents() {
-	t.header = NewAppHeader(t.version, t.serverCount).
-		OnButton(func(id string) {
-			go t.app.QueueUpdateDraw(func() {
-				switch id {
-				case "term":
-					t.openTerminal()
-				case "groups":
-					t.workspace.show()
-					t.workspace.groupManager()
-				case "quit":
-					t.handleQuit()
-				}
-			})
-		})
+	t.header = NewAppHeader(t.version, t.serverCount)
 	t.searchBar = NewSearchBar().
 		OnSearch(func(string) { t.refreshServerList() }).
 		OnEscape(t.blurSearchBar).

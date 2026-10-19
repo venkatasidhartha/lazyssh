@@ -21,34 +21,17 @@ const Author = "Venkata Sidhartha K"
 
 type AppHeader struct {
 	*tview.Flex
-	right    *tview.TextView
-	count    func() int
-	onButton func(id string)
+	right *tview.TextView
+	count func() int
 }
-
-// OnButton is called with "term", "groups" or "quit" when a header button
-// is clicked.
-func (h *AppHeader) OnButton(f func(id string)) *AppHeader { h.onButton = f; return h }
 
 func NewAppHeader(version string, count func() int) *AppHeader {
 	bg := tcell.Color234
 	h := &AppHeader{Flex: tview.NewFlex(), count: count}
 
-	left := tview.NewTextView().SetDynamicColors(true).SetRegions(true).SetTextAlign(tview.AlignLeft)
+	left := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignLeft)
 	left.SetBackgroundColor(bg)
-	left.SetText(`🚀 [#FFFFFF::b]lazy[-][#55D7FF::b]ssh[-:-:-]  ["term"][black:#55D7FF] ▶ Terminal [-:-][""] ["groups"][black:#87D7AF] ▣ Groups [-:-][""] ["quit"][black:#FF8787] ⏻ Quit [-:-][""]`)
-	left.SetMouseCapture(func(a tview.MouseAction, ev *tcell.EventMouse) (tview.MouseAction, *tcell.EventMouse) {
-		if a == tview.MouseLeftDoubleClick {
-			a = tview.MouseLeftClick
-		}
-		return a, ev
-	})
-	left.SetHighlightedFunc(func(added, _, _ []string) {
-		if len(added) > 0 && h.onButton != nil {
-			left.Highlight()
-			h.onButton(added[0])
-		}
-	})
+	left.SetText("🚀 [#FFFFFF::b]lazy[-][#55D7FF::b]ssh[-]")
 
 	center := tview.NewTextView().SetDynamicColors(true).SetTextAlign(tview.AlignCenter)
 	center.SetBackgroundColor(bg)
@@ -90,7 +73,7 @@ func makeTag(text, bg string) string {
 // ---------------------------------------------------------------------------
 
 func DefaultStatusText() string {
-	return "[white]↑↓[-] Navigate  • [white]Enter[-] SSH  • [white]l[-] Local terminal  • [white]w[-] Workspace  • [white]o[-] Open in pane  • [white]f[-] Forward  • [white]x[-] Stop Forward  • [white]c[-] Copy SSH  • [white]a[-] Add  • [white]e[-] Edit  • [white]g[-] Ping  • [white]d[-] Delete  • [white]p[-] Pin/Unpin  • [white]/[-] Search  • [white]q[-] Quit"
+	return "[white]↑↓[-] Navigate  • [white]Enter[-] SSH  • [white]f[-] Forward  • [white]x[-] Stop Forward  • [white]c[-] Copy SSH  • [white]a[-] Add  • [white]e[-] Edit  • [white]g[-] Ping  • [white]d[-] Delete  • [white]p[-] Pin/Unpin  • [white]/[-] Search  • [white]q[-] Quit"
 }
 
 func NewStatusBar() *tview.TextView {
@@ -196,18 +179,6 @@ func NewServerList() *ServerList {
 		}
 	})
 	sl.Table.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		// With only the header row, tview's table loops forever looking
-		// for a selectable row: there is nothing to move to anyway.
-		if len(sl.servers) == 0 {
-			switch event.Key() {
-			case tcell.KeyUp, tcell.KeyDown, tcell.KeyHome, tcell.KeyEnd, tcell.KeyPgUp, tcell.KeyPgDn:
-				return nil
-			case tcell.KeyRune:
-				if strings.ContainsRune("jkgGhl", event.Rune()) {
-					return nil
-				}
-			}
-		}
 		switch event.Key() {
 		case tcell.KeyLeft, tcell.KeyRight, tcell.KeyBackspace, tcell.KeyBackspace2, tcell.KeyESC:
 			if sl.onReturnToSearch != nil {

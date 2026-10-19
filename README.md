@@ -117,6 +117,40 @@ instead of the Debian/Ubuntu paths.
   port forwarding (Local, Remote and Dynamic/SOCKS5). Forwarding also works
   on password-only servers.
 
+## Workspace: split panes, popups and sessions that stay alive
+
+Press `l` (or click **▶ Terminal**) for a local terminal, `w` to open the
+selected server in the workspace, or `o` to add it next to the open ones.
+With no servers saved, lazyssh starts straight in a local terminal.
+Everything works with the mouse:
+
+- **Buttons on every pane's title bar**: ✎ rename · ⇆ ⇅ split right / down ·
+  ❐ pop out into a popup · ⤢ full screen (or double-click the title) · ✕ close.
+  Drag the line between two panes to resize them; **⊟ Even sizes** resets them.
+- **Popup windows** (❐ Popup): drag the title to move, drag ◢ to resize,
+  ▁ minimize to the bottom bar, □ maximize, ⊞ dock back into the panes.
+- **Like a normal terminal**: the wheel scrolls back (10,000 lines), drag
+  selects and copies, double-click selects a word, right-click pastes.
+  htop, vim, nvim, mc, less and other full-screen programs work, mouse
+  included (Shift+drag selects text inside them).
+- **★ Commands**: save commands you use often; one click types them into the
+  session (▶ Type) or runs them (↵ Run). Add, edit and remove them there.
+- **▣ Groups**: save the open sessions (servers, local shells, names, layout)
+  as a group such as "prod monitoring" and open all of them with one click.
+- **Sessions stay alive**: quitting lazyssh (⏻ Quit) keeps them running in
+  the background — servers stay connected, programs keep running. The next
+  time lazyssh opens, the same panes, popups, names and output are back.
+  Choose "End sessions and quit" to close them instead.
+
+```sh
+lazyssh sessions          # list the sessions running in the background
+lazyssh sessions stop     # end them all
+LAZYSSH_NO_BACKGROUND=1 lazyssh   # sessions end when lazyssh closes
+```
+
+Keys are optional: Ctrl+C always goes to the program, Ctrl+A then a letter
+gives keyboard shortcuts for everything (`?` shows them all).
+
 ## Keys
 
 | Key | Action | Key | Action |
@@ -130,6 +164,7 @@ instead of the Debian/Ubuntu paths.
 | `f` | Port forward | `x` | Stop forwards |
 | `K` | Redo key setup | `q` | Quit |
 | `v` | Show / hide password | `y` | Copy password |
+| `l` | Local terminal | `w` / `o` | Workspace / open server in a pane |
 
 In the form: `Tab`/`↑↓` move between fields, `Ctrl+S` saves, `Esc` cancels.
 
@@ -151,6 +186,9 @@ different directory.
 | `servers.json` | Server list. Written atomically with mode 0600. The previous version is kept as `servers.json.bak`. |
 | `secret.key` | AES-256-GCM key that encrypts the saved passwords |
 | `keys/id_ed25519` | The key lazyssh manages and installs on servers |
+| `workspace.json` | The workspace layout, to bring it back on the next start |
+| `commands.json`, `groups.json` | Saved commands and session groups |
+| `sessions.sock` | Socket of the background session service (only while it runs) |
 
 Host keys are checked against `~/.ssh/known_hosts`, the same file OpenSSH
 uses. New hosts are trusted on first use. A changed host key is rejected.
